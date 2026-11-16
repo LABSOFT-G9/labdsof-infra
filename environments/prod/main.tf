@@ -1,8 +1,12 @@
 # The same internal modules for every environment; only the values in
 # terraform.tfvars differ (see README "Environments").
 
+data "aws_caller_identity" "current" {}
+
 locals {
   name = "bmc-${var.environment}"
+  # Created by bootstrap/; the deploy roles may only create roles that carry it.
+  workload_boundary_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/bmc-workload-boundary"
 }
 
 module "network" {
@@ -49,4 +53,5 @@ module "database" {
   client_security_group_ids = [aws_security_group.app.id]
   backups_bucket            = module.storage.backups_bucket
   backups_bucket_arn        = module.storage.backups_bucket_arn
+  permissions_boundary      = local.workload_boundary_arn
 }

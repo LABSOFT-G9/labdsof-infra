@@ -75,6 +75,11 @@ variable "backups_bucket_arn" {
   type        = string
 }
 
+variable "permissions_boundary" {
+  description = "ARN of the IAM permissions boundary every workload role must carry (bootstrap output workload_boundary_arn)."
+  type        = string
+}
+
 variable "backup_schedule" {
   description = "systemd OnCalendar expression for the nightly backup, in UTC."
   type        = string

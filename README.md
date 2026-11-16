@@ -130,11 +130,13 @@ All created by `bootstrap/` (applied once by an admin, by hand). IAM is free on 
 | Role | Used by | Can |
 |---|---|---|
 | `bmc-github-plan` | CI, every branch and PR | read-only; write only the state lock; no bucket contents, no secret values |
-| `bmc-deploy-dev` | CI on `main`, GitHub environment `dev` | deploy (apply, destroy) the infrastructure; AdministratorAccess |
-| `bmc-deploy-prod` | CI on `main`, GitHub environment `prod`, after approval | the same, for prod |
+| `bmc-deploy-dev` | CI on `main`, GitHub environment `dev` | deploy (apply, destroy) **dev only**: EC2/VPC resources tagged `Environment=dev`, buckets `bmc-dev-*`, roles and instance profiles `bmc-dev-*` (with the workload boundary), its own state file, one region |
+| `bmc-deploy-prod` | CI on `main`, GitHub environment `prod`, after approval | the same, for prod only |
 | `bmc-admin` | people (switch role, MFA) | everything; emergencies only |
 | `bmc-operator` | people (switch role, MFA) | view everything; start, stop, reboot BMC instances; Session Manager; read backups and logs. No creating or deleting infrastructure |
 | `bmc-viewonly` | people (switch role, MFA) | view resources, settings, costs and metrics; no data, no secrets |
+
+The deploy roles have no admin rights. Every role they create (for example `bmc-dev-database`) must carry the permissions boundary `bmc-workload-boundary` (SSM and the `bmc-*` buckets only), so a deploy role cannot create a more powerful role for itself; it can attach only AWS's `AmazonSSMManagedInstanceCore` policy, cannot remove a boundary, and cannot retag a resource into the other environment. When a new kind of resource is added and an apply fails with `AccessDenied`, add exactly the missing action to `bootstrap/github-oidc.tf` in a reviewed PR. These policies have not been run against AWS yet; the first dev apply is their test.
 
 ### Team access
 

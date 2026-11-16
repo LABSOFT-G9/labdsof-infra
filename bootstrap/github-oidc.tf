@@ -106,17 +106,232 @@ resource "aws_iam_role_policy" "plan" {
   policy = data.aws_iam_policy_document.plan.json
 }
 
-# --- Deploy roles -------------------------------------------------------------
-# AdministratorAccess: the configuration creates IAM roles, VPCs, instances and
-# buckets, so a narrower policy would need constant upkeep. Each role is
-# limited by its trust policy to one GitHub environment, and `prod` requires a
-# reviewer. Narrowing these policies is a follow-up (US-22-02).
+# --- Deploy roles: least privilege, one environment each --------------------
+# A deploy role can only create, change and delete what this repository's
+# Terraform manages for ITS environment, in the configured region:
+#   EC2/VPC   resources tagged Environment=<env> (tag required when creating)
+#   S3        buckets named bmc-<env>-*, and its own state file
+#   IAM       roles and instance profiles named bmc-<env>-*, only with the
+#             workload permissions boundary, and only AWS's SSM policy attached
+# It cannot touch the other environment, other IAM, billing or other services.
+# If a future resource needs another permission, the apply fails with
+# AccessDenied: add exactly that action here, in a reviewed PR.
 
-resource "aws_iam_role_policy_attachment" "deploy_admin" {
-  for_each = toset(["deploy-dev", "deploy-prod"])
+locals {
+  deploy_envs = { "deploy-dev" = "dev", "deploy-prod" = "prod" }
+}
 
-  role       = aws_iam_role.github[each.key].name
-  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+# Workload roles (for example bmc-<env>-database) must carry this boundary:
+# whatever policy a deploy role writes into them, they can never do more than
+# this. It stops a deploy role from creating an admin role for itself.
+data "aws_iam_policy_document" "workload_boundary" {
+  statement {
+    sid       = "SessionManagerAndRunCommand"
+    actions   = ["ssm:*", "ssmmessages:*", "ec2messages:*"]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "BmcBuckets"
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
+    resources = ["arn:aws:s3:::bmc-*", "arn:aws:s3:::bmc-*/*"]
+  }
+}
+
+resource "aws_iam_policy" "workload_boundary" {
+  name        = "bmc-workload-boundary"
+  description = "Maximum permissions of any role the deploy roles create."
+  policy      = data.aws_iam_policy_document.workload_boundary.json
+}
+
+data "aws_iam_policy_document" "deploy" {
+  for_each = local.deploy_envs
+
+  # Read everything Terraform refreshes (no data, no secrets).
+  statement {
+    sid       = "Read"
+    actions   = ["ec2:Describe*", "ec2:Get*", "iam:Get*", "iam:List*", "s3:ListAllMyBuckets", "sts:GetCallerIdentity"]
+    resources = ["*"]
+  }
+
+  # Own state file only.
+  statement {
+    sid       = "StateList"
+    actions   = ["s3:ListBucket"]
+    resources = [aws_s3_bucket.state.arn]
+  }
+  statement {
+    sid       = "StateObjects"
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+    resources = ["${aws_s3_bucket.state.arn}/${each.value}/*"]
+  }
+
+  # EC2 / VPC: creating requires the Environment tag in the request ...
+  statement {
+    sid       = "Ec2CreateTagged"
+    actions   = ["ec2:Create*", "ec2:RunInstances", "ec2:AllocateAddress", "ec2:AuthorizeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Environment"
+      values   = [each.value]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+  # ... tagging is allowed only as part of that create ...
+  statement {
+    sid       = "Ec2TagOnCreate"
+    actions   = ["ec2:CreateTags"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/Environment"
+      values   = [each.value]
+    }
+    condition {
+      test     = "Null"
+      variable = "ec2:CreateAction"
+      values   = ["false"]
+    }
+  }
+  # ... RunInstances also uses the AMI and an untagged network interface ...
+  statement {
+    sid     = "Ec2RunInstancesShared"
+    actions = ["ec2:RunInstances"]
+    resources = [
+      "arn:aws:ec2:${var.region}::image/*",
+      "arn:aws:ec2:${var.region}:${data.aws_caller_identity.current.account_id}:network-interface/*",
+    ]
+  }
+  # ... and everything else only on resources already tagged with this environment.
+  statement {
+    sid       = "Ec2ManageTagged"
+    actions   = ["ec2:*"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:ResourceTag/Environment"
+      values   = [each.value]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestedRegion"
+      values   = [var.region]
+    }
+  }
+
+  # Never move a resource into another environment by changing its tag.
+  statement {
+    sid       = "NoRetagToOtherEnvironment"
+    effect    = "Deny"
+    actions   = ["ec2:CreateTags"]
+    resources = ["*"]
+    condition {
+      test     = "StringNotEquals"
+      variable = "aws:RequestTag/Environment"
+      values   = [each.value]
+    }
+    condition {
+      test     = "Null"
+      variable = "aws:RequestTag/Environment"
+      values   = ["false"]
+    }
+  }
+  statement {
+    sid       = "NoUntagEnvironment"
+    effect    = "Deny"
+    actions   = ["ec2:DeleteTags"]
+    resources = ["*"]
+    condition {
+      test     = "ForAnyValue:StringEquals"
+      variable = "aws:TagKeys"
+      values   = ["Environment"]
+    }
+  }
+
+  # S3: this environment's buckets only.
+  statement {
+    sid       = "Buckets"
+    actions   = ["s3:*"]
+    resources = ["arn:aws:s3:::bmc-${each.value}-*", "arn:aws:s3:::bmc-${each.value}-*/*"]
+  }
+
+  # IAM: this environment's workload roles, always with the boundary.
+  statement {
+    sid       = "WorkloadRolesWithBoundary"
+    actions   = ["iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:DeleteRolePolicy"]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/bmc-${each.value}-*"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PermissionsBoundary"
+      values   = [aws_iam_policy.workload_boundary.arn]
+    }
+  }
+  statement {
+    sid = "WorkloadRolesManage"
+    actions = [
+      "iam:DeleteRole",
+      "iam:TagRole",
+      "iam:UntagRole",
+      "iam:UpdateRole",
+      "iam:UpdateAssumeRolePolicy",
+    ]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/bmc-${each.value}-*"]
+  }
+  statement {
+    sid       = "OnlySsmManagedPolicy"
+    effect    = "Deny"
+    actions   = ["iam:AttachRolePolicy"]
+    resources = ["*"]
+    condition {
+      test     = "ArnNotEquals"
+      variable = "iam:PolicyARN"
+      values   = ["arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"]
+    }
+  }
+  statement {
+    sid       = "KeepBoundary"
+    effect    = "Deny"
+    actions   = ["iam:DeleteRolePermissionsBoundary", "iam:PutRolePermissionsBoundary"]
+    resources = ["*"]
+  }
+  statement {
+    sid = "InstanceProfiles"
+    actions = [
+      "iam:CreateInstanceProfile",
+      "iam:DeleteInstanceProfile",
+      "iam:AddRoleToInstanceProfile",
+      "iam:RemoveRoleFromInstanceProfile",
+      "iam:TagInstanceProfile",
+      "iam:UntagInstanceProfile",
+    ]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:instance-profile/bmc-${each.value}-*"]
+  }
+  statement {
+    sid       = "PassWorkloadRoleToEc2"
+    actions   = ["iam:PassRole"]
+    resources = ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/bmc-${each.value}-*"]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ec2.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "deploy" {
+  for_each = local.deploy_envs
+
+  name   = "bmc-${each.key}"
+  role   = aws_iam_role.github[each.key].id
+  policy = data.aws_iam_policy_document.deploy[each.key].json
+}
+
+output "workload_boundary_arn" {
+  value = aws_iam_policy.workload_boundary.arn
 }
 
 output "github_role_arns" {

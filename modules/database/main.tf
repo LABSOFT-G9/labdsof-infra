@@ -81,8 +81,9 @@ data "aws_iam_policy_document" "assume" {
 }
 
 resource "aws_iam_role" "database" {
-  name               = "${var.name}-database"
-  assume_role_policy = data.aws_iam_policy_document.assume.json
+  name                 = "${var.name}-database"
+  assume_role_policy   = data.aws_iam_policy_document.assume.json
+  permissions_boundary = var.permissions_boundary
 }
 
 # Session Manager access instead of SSH.
