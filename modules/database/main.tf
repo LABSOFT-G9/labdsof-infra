@@ -135,9 +135,10 @@ resource "aws_instance" "database" {
     http_endpoint = "enabled"
   }
 
+  # OS and Docker images only; MySQL data is on the separate data volume.
   root_block_device {
     volume_type = "gp3"
-    volume_size = 20
+    volume_size = 8
     encrypted   = true
   }
 

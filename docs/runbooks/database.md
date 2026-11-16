@@ -37,7 +37,7 @@ sudo docker compose -f /opt/bmc/compose.yaml ps
 
 - Nightly at 02:00 UTC (`bmc-backup.timer`), to `s3://bmc-<env>-backups-<account>/mysql/<env>/<timestamp>.sql.gz`.
 - Manual backup: `sudo systemctl start bmc-backup.service`, then `journalctl -u bmc-backup.service`.
-- Retention: 7 days in dev, 30 in prod (lifecycle rule). Prod backups are locked for 14 days (Object Lock, governance mode).
+- Retention: 7 days in dev, 30 in prod (lifecycle rule). Object Lock is off in both while they are short-lived (README "Environments").
 - The host can only write new backups; listing, reading and restoring need admin credentials.
 
 ## Restore (exercise at least once, NFR-09)
@@ -56,6 +56,8 @@ The dump includes the `mysql` system schema, so users and grants are restored as
 ## Replace the host
 
 `terraform apply` after an AMI change replaces the instance. The data volume is detached and reattached; MySQL starts on the existing data. Take a manual backup first in prod.
+
+Destroying an environment (README "Lifecycle") deletes its backups bucket too: download any backup you want to keep first.
 
 ## Not covered yet
 

@@ -32,14 +32,26 @@ Each environment has its own state file (`<env>/terraform.tfstate` in the state 
 | VPC | `10.10.0.0/16` | `10.20.0.0/16` |
 | Database AMI | newest build (`"*"`) | pinned version (`1.0.0`), changed only by a PR |
 | Instance | `t3.micro` | `t3.small` |
-| Data volume | 10 GiB | 20 GiB |
+| Data volume | 10 GiB | 10 GiB |
 | Database subnet | public subnet, outbound-only public IP, no NAT or endpoint cost | private subnet with SSM interface endpoints (billed per hour) |
-| Termination protection | off | on |
 | Backup retention | 7 days | 30 days |
-| Backup Object Lock | off | 14 days, governance mode |
-| `terraform destroy` deletes non-empty buckets | yes | no |
+| Teardown | one step (`destroy`) | one step (`destroy`), after approval |
 
 In both, MySQL (3306) is reachable only from the application host's security group, the exporter (9104) only from monitoring groups, and no SSH port is open; administration goes through SSM Session Manager.
+
+Both environments are short-lived: dev is created to test the setup and destroyed afterwards; prod is created later, only to show a promotion, and destroyed after the showcase. That is why neither has termination protection or Object Lock, and their buckets can be deleted while not empty. For a long-lived prod, set `deletion_protection = true`, `force_destroy_buckets = false` and `backup_lock_days` above 0 in `environments/prod/terraform.tfvars` (the lock needs a new backups bucket).
+
+## Lifecycle: create, test, destroy
+
+1. **Create**: merge to `main`; CI plans and applies dev (and prod after approval, once it is wanted).
+2. **Test**: runbook checks (Session Manager, MySQL up, a manual backup lands in S3, a restore).
+3. **Destroy**: Actions → CI → Run workflow on `main`, choose `dev` or `prod`. It shows the destroy plan in the summary and removes everything in that environment, including the attachments and backups buckets. `prod` waits for approval.
+4. **Clean up what Terraform does not own** (costs cents, but adds up):
+   - old AMIs: deregister them and delete their snapshots (EC2 → AMIs, EC2 → Snapshots);
+   - SSM parameters `/bmc/<env>/database/*` (free; delete if the environment will not come back).
+5. **Keep**: the bootstrap state bucket and the GitHub roles (free or cents), so the next create works without setup.
+
+Until the next create, nothing in the environment costs anything.
 
 ## Database host
 

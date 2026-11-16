@@ -1,4 +1,5 @@
-# dev: cheap and disposable. Takes the newest AMI build.
+# dev: cheap and disposable (created to test, then destroyed). Takes the
+# newest AMI build.
 environment                = "dev"
 region                     = "eu-west-1"
 vpc_cidr                   = "10.10.0.0/16"
