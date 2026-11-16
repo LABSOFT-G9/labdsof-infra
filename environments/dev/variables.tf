@@ -10,6 +10,11 @@ variable "vpc_cidr" {
   type = string
 }
 
+variable "database_enabled" {
+  description = "Create the database host. Needs a bmc-database AMI to exist."
+  type        = bool
+}
+
 variable "database_ami_version" {
   description = "bmc-database AMI version; \"*\" = newest build."
   type        = string

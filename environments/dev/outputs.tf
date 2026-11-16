@@ -1,19 +1,19 @@
 output "database_private_ip" {
-  value = module.database.private_ip
+  value = one(module.database[*].private_ip)
 }
 
 output "database_instance_id" {
   description = "For SSM Session Manager: aws ssm start-session --target <id>"
-  value       = module.database.instance_id
+  value       = one(module.database[*].instance_id)
 }
 
 output "database_ami_id" {
-  value = module.database.ami_id
+  value = one(module.database[*].ami_id)
 }
 
 output "database_parameter_prefix" {
   description = "Create the database secrets here before the first apply (docs/runbooks/database.md)."
-  value       = module.database.parameter_prefix
+  value       = one(module.database[*].parameter_prefix)
 }
 
 output "attachments_bucket" {

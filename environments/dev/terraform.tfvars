@@ -3,6 +3,7 @@
 environment                = "dev"
 region                     = "eu-west-1"
 vpc_cidr                   = "10.10.0.0/16"
+database_enabled           = false
 database_ami_version       = "*"
 database_instance_type     = "t3.micro"
 database_volume_size       = 10

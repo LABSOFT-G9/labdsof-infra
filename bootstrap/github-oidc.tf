@@ -77,12 +77,21 @@ data "aws_iam_policy_document" "plan" {
   statement {
     sid       = "StateRead"
     actions   = ["s3:GetObject"]
-    resources = ["${aws_s3_bucket.state.arn}/*"]
+    resources = ["${aws_s3_bucket.state.arn}/dev/*", "${aws_s3_bucket.state.arn}/prod/*"]
   }
   statement {
     sid       = "StateLock"
     actions   = ["s3:PutObject", "s3:DeleteObject"]
-    resources = ["${aws_s3_bucket.state.arn}/*.tflock"]
+    resources = ["${aws_s3_bucket.state.arn}/dev/*.tflock", "${aws_s3_bucket.state.arn}/prod/*.tflock"]
+  }
+
+  # bootstrap/ holds the state of the roles themselves: admins only.
+  # (ReadOnlyAccess would otherwise allow reading it.)
+  statement {
+    sid       = "NoBootstrapState"
+    effect    = "Deny"
+    actions   = ["s3:*"]
+    resources = ["${aws_s3_bucket.state.arn}/bootstrap/*"]
   }
 
   # ReadOnlyAccess would also let pull-request code read data and secrets.

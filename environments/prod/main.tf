@@ -15,7 +15,7 @@ module "network" {
   name                 = local.name
   region               = var.region
   cidr_block           = var.vpc_cidr
-  enable_ssm_endpoints = var.database_in_private_subnet
+  enable_ssm_endpoints = var.database_enabled && var.database_in_private_subnet
 }
 
 module "storage" {
@@ -37,8 +37,11 @@ resource "aws_security_group" "app" {
   tags = { Name = "${local.name}-app" }
 }
 
+# Off until the first database AMI exists (ami/database); network and buckets
+# do not need it.
 module "database" {
   source = "../../modules/database"
+  count  = var.database_enabled ? 1 : 0
 
   name                      = local.name
   environment               = var.environment

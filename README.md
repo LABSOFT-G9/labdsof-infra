@@ -30,6 +30,7 @@ Each environment has its own state file (`<env>/terraform.tfstate` in the state 
 | Setting | dev | prod |
 |---|---|---|
 | VPC | `10.10.0.0/16` | `10.20.0.0/16` |
+| Database host | off for now (`database_enabled = false`) | off for now |
 | Database AMI | newest build (`"*"`) | pinned version (`1.0.0`), changed only by a PR |
 | Instance | `t3.micro` | `t3.small` |
 | Data volume | 10 GiB | 10 GiB |
@@ -69,24 +70,30 @@ Details and procedures: [docs/runbooks/database.md](docs/runbooks/database.md).
 
 ## First-time setup (per AWS account)
 
-1. **State bucket and GitHub access** (admin credentials, local state): creates the state bucket, the GitHub OIDC provider and the roles `bmc-github-plan`, `bmc-deploy-dev`, `bmc-deploy-prod`.
+1. **Bootstrap: state bucket and IAM** (admin credentials, for example AWS CloudShell). Creates the single state bucket, the GitHub OIDC provider, the plan and deploy roles, the workload boundary, and the team roles, groups and users. Its own state ends up in the same bucket:
    ```
-   cd bootstrap && terraform init && terraform apply
+   cd bootstrap
+   mv backend.tf backend.tf.off && terraform init && terraform apply   # first run: local state
+   mv backend.tf.off backend.tf
+   terraform init -migrate-state -backend-config="bucket=$(terraform output -raw state_bucket)"
    ```
-   Then set the GitHub settings below from its outputs.
-2. **Database secrets** for each environment, as `SecureString` parameters `root_password`, `backup_password`, `exporter_password` under `/bmc/<env>/database/` (runbook, "Secrets").
-3. **AMI**:
-   ```
-   packer init ami/database && packer build -var version=1.0.0 ami/database
-   ```
-4. **Environments**: from then on through pull requests and CI (below). Locally, for a plan only:
-   ```
-   cd environments/dev
-   terraform init -backend-config="bucket=bmc-terraform-state-<account-id>"
-   terraform plan
-   ```
+   Later runs: `terraform init -backend-config="bucket=bmc-terraform-state-<account-id>"`, then plan and apply. Then set the GitHub settings below from the outputs.
+2. **Environments** through pull requests and CI (below). The first deploy creates the network and the buckets; the database host stays off (`database_enabled = false`) until the database AMI exists.
+3. **Later, for the database host**: the secrets (runbook, "Secrets"), the AMI (`packer init ami/database && packer build -var version=1.0.0 ami/database`), then `database_enabled = true` in a PR.
 
-Terraform ≥ 1.10 (S3 state locking without DynamoDB), AWS provider 6.x, Packer ≥ 1.11. CI uses Terraform 1.17.2 and Packer 1.16.2.
+### State
+
+One bucket, `bmc-terraform-state-<account-id>`, one folder per configuration:
+
+| Folder | Configuration | Read and write |
+|---|---|---|
+| `bootstrap/` | `bootstrap/` | admins only |
+| `dev/` | `environments/dev` | `bmc-deploy-dev`; `bmc-github-plan` reads and locks |
+| `prod/` | `environments/prod` | `bmc-deploy-prod`; `bmc-github-plan` reads and locks |
+
+Versioned, encrypted, no public access, locked with S3 lock files (no DynamoDB), protected from `terraform destroy`.
+
+Terraform ≥ 1.10, AWS provider 6.x, Packer ≥ 1.11. CI uses Terraform 1.17.2 and Packer 1.16.2.
 
 ## CI/CD
 

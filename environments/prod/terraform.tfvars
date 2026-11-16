@@ -7,6 +7,7 @@
 environment                = "prod"
 region                     = "eu-west-1"
 vpc_cidr                   = "10.20.0.0/16"
+database_enabled           = false
 database_ami_version       = "1.0.0"
 database_instance_type     = "t3.small"
 database_volume_size       = 10
