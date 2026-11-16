@@ -69,7 +69,7 @@ Details and procedures: [docs/runbooks/database.md](docs/runbooks/database.md).
 
 ## First-time setup (per AWS account)
 
-1. **State bucket and GitHub access** (admin credentials, local state): creates the state bucket, the GitHub OIDC provider and the roles `bmc-github-plan`, `bmc-github-apply-dev`, `bmc-github-apply-prod`.
+1. **State bucket and GitHub access** (admin credentials, local state): creates the state bucket, the GitHub OIDC provider and the roles `bmc-github-plan`, `bmc-deploy-dev`, `bmc-deploy-prod`.
    ```
    cd bootstrap && terraform init && terraform apply
    ```
@@ -99,7 +99,7 @@ Everything is in one workflow, `.github/workflows/ci.yml`; the branch decides ho
 
 - **Lint** (no AWS access): `terraform fmt`, `terraform validate` and TFLint for `environments/dev`, `environments/prod` and `bootstrap`; `packer fmt` and `packer validate`; ShellCheck.
 - **Plan** (job `plan`, one per environment, role `bmc-github-plan`): read-only, cannot read bucket objects or secret values. The plan is shown in the job summary and saved as an artifact for one day.
-- **Apply** (job `apply`, only on `main`, dev then prod, in the GitHub environment `dev` or `prod`, role `bmc-github-apply-<env>`): applies exactly the plan saved earlier in the same run; if the state changed in between, Terraform refuses and nothing changes. If dev fails, prod is cancelled. The `prod` approval is asked even when the prod plan has no changes (the job then ends without touching AWS), because a GitHub environment gates a whole job.
+- **Apply** (job `apply`, only on `main`, dev then prod, in the GitHub environment `dev` or `prod`, role `bmc-deploy-<env>`): applies exactly the plan saved earlier in the same run; if the state changed in between, Terraform refuses and nothing changes. If dev fails, prod is cancelled. The `prod` approval is asked even when the prod plan has no changes (the job then ends without touching AWS), because a GitHub environment gates a whole job.
 - Pull requests from forks stop after lint (GitHub gives them no OIDC token).
 - `ci-required` (lint and both plans) is the single check to require on `main`.
 - The bootstrap configuration is never applied by CI.
@@ -114,14 +114,45 @@ Values come from the outputs of `bootstrap/`. None of them is a secret.
 | Repository variable | `AWS_REGION` | `eu-west-1` |
 | Repository variable | `TF_STATE_BUCKET` | `bmc-terraform-state-<account-id>` |
 | Repository variable | `AWS_PLAN_ROLE_ARN` | ARN of `bmc-github-plan` |
-| Environment `dev` | variable `AWS_APPLY_ROLE_ARN` | ARN of `bmc-github-apply-dev` |
+| Environment `dev` | variable `AWS_DEPLOY_ROLE_ARN` | ARN of `bmc-deploy-dev` |
 | Environment `dev` | deployment branches | `main` only |
-| Environment `prod` | variable `AWS_APPLY_ROLE_ARN` | ARN of `bmc-github-apply-prod` |
+| Environment `prod` | variable `AWS_DEPLOY_ROLE_ARN` | ARN of `bmc-deploy-prod` |
 | Environment `prod` | deployment branches | `main` only |
 | Environment `prod` | required reviewers | team `maintainers`, prevent self-review |
 | Ruleset `main-review` | required status check | `ci-required` |
 
-The `main`-only deployment branches matter: the apply roles trust any job running in that GitHub environment.
+The `main`-only deployment branches matter: the deploy roles trust any job running in that GitHub environment.
+
+## AWS roles
+
+All created by `bootstrap/` (applied once by an admin, by hand). IAM is free on the AWS free plan; IAM Identity Center is not available without upgrading, so people use plain IAM.
+
+| Role | Used by | Can |
+|---|---|---|
+| `bmc-github-plan` | CI, every branch and PR | read-only; write only the state lock; no bucket contents, no secret values |
+| `bmc-deploy-dev` | CI on `main`, GitHub environment `dev` | deploy (apply, destroy) the infrastructure; AdministratorAccess |
+| `bmc-deploy-prod` | CI on `main`, GitHub environment `prod`, after approval | the same, for prod |
+| `bmc-admin` | people (switch role, MFA) | everything; emergencies only |
+| `bmc-operator` | people (switch role, MFA) | view everything; start, stop, reboot BMC instances; Session Manager; read backups and logs. No creating or deleting infrastructure |
+| `bmc-viewonly` | people (switch role, MFA) | view resources, settings, costs and metrics; no data, no secrets |
+
+### Team access
+
+Each person has an IAM user with no permissions of its own, in one group that decides which roles they may switch into (`team` in `bootstrap/team-access.tf`):
+
+| User | Group | Can switch into |
+|---|---|---|
+| `martim` | `bmc-admin-users` | admin, operator, viewonly |
+| `ricardo` | `bmc-operator-users` | operator, viewonly |
+| `pedro`, `afonso`, `sandro` | `bmc-viewonly-users` | viewonly |
+
+Adding, removing or changing someone is a PR to that map, applied by an admin. First sign-in:
+
+1. The admin creates a one-time console password for the user (IAM → Users → Security credentials → Enable console access, "must change at next sign-in") and sends it privately.
+2. The person signs in at `https://<account-id>.signin.aws.amazon.com/console`, sets a new password (14+ characters) and assigns an MFA device to their own user.
+3. They sign out and in again with MFA, then **Switch role**: account ID and role name (for example `bmc-operator`). Sessions last one hour.
+
+No access keys for people; the root user has MFA and is not used day to day.
 
 ## Not here yet
 

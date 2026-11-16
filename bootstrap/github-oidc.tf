@@ -3,10 +3,11 @@
 #
 #   bmc-github-plan        pull requests and main, no GitHub environment:
 #                          read-only, plus the state bucket (state and lock file)
-#   bmc-github-apply-dev   jobs in the GitHub environment `dev`
-#   bmc-github-apply-prod  jobs in the GitHub environment `prod` (required reviewers)
+#   bmc-deploy-dev         deploys the infrastructure: jobs in the GitHub environment `dev`
+#   bmc-deploy-prod        deploys the infrastructure: jobs in the GitHub environment `prod`
+#                          (required reviewers)
 #
-# The apply roles are only as safe as the GitHub environments: restrict both to
+# The deploy roles are only as safe as the GitHub environments: restrict both to
 # the `main` branch (README "GitHub settings"), or a branch could deploy.
 
 variable "github_repository" {
@@ -26,9 +27,9 @@ resource "aws_iam_openid_connect_provider" "github" {
 
 data "aws_iam_policy_document" "trust" {
   for_each = {
-    plan       = ["repo:${var.github_repository}:pull_request", "repo:${var.github_repository}:ref:refs/heads/main"]
-    apply-dev  = ["repo:${var.github_repository}:environment:dev"]
-    apply-prod = ["repo:${var.github_repository}:environment:prod"]
+    plan        = ["repo:${var.github_repository}:pull_request", "repo:${var.github_repository}:ref:refs/heads/main"]
+    deploy-dev  = ["repo:${var.github_repository}:environment:dev"]
+    deploy-prod = ["repo:${var.github_repository}:environment:prod"]
   }
 
   statement {
@@ -53,7 +54,7 @@ data "aws_iam_policy_document" "trust" {
 resource "aws_iam_role" "github" {
   for_each = data.aws_iam_policy_document.trust
 
-  name                 = "bmc-github-${each.key}"
+  name                 = each.key == "plan" ? "bmc-github-plan" : "bmc-${each.key}"
   assume_role_policy   = each.value.json
   max_session_duration = 3600
 }
@@ -105,20 +106,20 @@ resource "aws_iam_role_policy" "plan" {
   policy = data.aws_iam_policy_document.plan.json
 }
 
-# --- Apply roles -------------------------------------------------------------
+# --- Deploy roles -------------------------------------------------------------
 # AdministratorAccess: the configuration creates IAM roles, VPCs, instances and
 # buckets, so a narrower policy would need constant upkeep. Each role is
 # limited by its trust policy to one GitHub environment, and `prod` requires a
 # reviewer. Narrowing these policies is a follow-up (US-22-02).
 
-resource "aws_iam_role_policy_attachment" "apply_admin" {
-  for_each = toset(["apply-dev", "apply-prod"])
+resource "aws_iam_role_policy_attachment" "deploy_admin" {
+  for_each = toset(["deploy-dev", "deploy-prod"])
 
   role       = aws_iam_role.github[each.key].name
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
 }
 
 output "github_role_arns" {
-  description = "Set as GitHub variables: plan -> repository variable AWS_PLAN_ROLE_ARN; apply-dev / apply-prod -> AWS_APPLY_ROLE_ARN on the dev / prod environment."
+  description = "Set as GitHub variables: plan -> repository variable AWS_PLAN_ROLE_ARN; deploy-dev / deploy-prod -> AWS_DEPLOY_ROLE_ARN on the dev / prod environment."
   value       = { for k, r in aws_iam_role.github : k => r.arn }
 }
