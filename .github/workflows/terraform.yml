@@ -1,0 +1,132 @@
+name: Terraform
+
+# Plan or apply one environment. Called by ci.yml, not run on its own.
+#
+#   plan   init + plan, saves the plan file as an artifact, shows it in the
+#          job summary. Uses the read-only plan role.
+#   apply  downloads that exact plan file and applies it. Runs in the GitHub
+#          environment of the same name (dev, prod), whose role can change
+#          AWS; `prod` has required reviewers, so the apply waits for approval.
+#
+# AWS access is GitHub OIDC (no stored keys). Roles and the state bucket come
+# from bootstrap/; their names are repository and environment variables
+# (README "GitHub settings"). Pins: full commit SHAs resolved with `gh api`
+# on 2026-11-16.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "dev or prod"
+        type: string
+        required: true
+      mode:
+        description: "plan or apply"
+        type: string
+        required: true
+    outputs:
+      changes:
+        description: "true when the plan has changes"
+        value: ${{ jobs.terraform.outputs.changes }}
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  WORKDIR: environments/${{ inputs.environment }}
+
+jobs:
+  terraform:
+    name: ${{ inputs.mode }} ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only the apply runs in a GitHub environment: its OIDC subject
+    # (repo:...:environment:<env>) is the only one the apply role trusts.
+    environment: ${{ inputs.mode == 'apply' && inputs.environment || '' }}
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC token for AWS
+    outputs:
+      changes: ${{ steps.plan.outputs.changes }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the request
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          case "$ENVIRONMENT" in dev|prod) ;; *) echo "::error::Unknown environment '$ENVIRONMENT'"; exit 1;; esac
+          case "$MODE" in plan|apply) ;; *) echo "::error::Unknown mode '$MODE'"; exit 1;; esac
+          if [ "$MODE" = apply ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Apply runs only from main"; exit 1
+          fi
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          # plan: repository variable; apply: variable on the dev / prod environment
+          role-to-assume: ${{ inputs.mode == 'apply' && vars.AWS_APPLY_ROLE_ARN || vars.AWS_PLAN_ROLE_ARN }}
+          role-session-name: gh-${{ inputs.mode }}-${{ inputs.environment }}-${{ github.run_id }}
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: 1.17.2
+          terraform_wrapper: false
+
+      - name: Init
+        working-directory: ${{ env.WORKDIR }}
+        env:
+          STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+        run: terraform init -lock-timeout=5m -backend-config="bucket=${STATE_BUCKET}"
+
+      - name: Plan
+        id: plan
+        if: inputs.mode == 'plan'
+        working-directory: ${{ env.WORKDIR }}
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          set +e
+          terraform plan -lock-timeout=5m -detailed-exitcode -out=tfplan
+          code=$?
+          set -e
+          case "$code" in
+            0) echo "changes=false" >>"$GITHUB_OUTPUT" ;;
+            2) echo "changes=true" >>"$GITHUB_OUTPUT" ;;
+            *) exit "$code" ;;
+          esac
+          {
+            echo "## Plan: ${ENVIRONMENT}"
+            echo '```'
+            terraform show -no-color tfplan | head -c 60000
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      # The plan file may contain sensitive values: kept one day, this run only.
+      - name: Save the plan
+        if: inputs.mode == 'plan'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tfplan-${{ inputs.environment }}
+          path: ${{ env.WORKDIR }}/tfplan
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Get the reviewed plan
+        if: inputs.mode == 'apply'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tfplan-${{ inputs.environment }}
+          path: ${{ env.WORKDIR }}
+
+      # Applies exactly the saved plan. If the state changed since the plan,
+      # Terraform refuses ("saved plan is stale") and nothing is changed.
+      - name: Apply
+        if: inputs.mode == 'apply'
+        working-directory: ${{ env.WORKDIR }}
+        run: terraform apply -lock-timeout=5m tfplan

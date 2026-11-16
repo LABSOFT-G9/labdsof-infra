@@ -57,33 +57,62 @@ Details and procedures: [docs/runbooks/database.md](docs/runbooks/database.md).
 
 ## First-time setup (per AWS account)
 
-1. **State bucket** (admin credentials, local state):
+1. **State bucket and GitHub access** (admin credentials, local state): creates the state bucket, the GitHub OIDC provider and the roles `bmc-github-plan`, `bmc-github-apply-dev`, `bmc-github-apply-prod`.
    ```
    cd bootstrap && terraform init && terraform apply
    ```
+   Then set the GitHub settings below from its outputs.
 2. **Database secrets** for each environment, as `SecureString` parameters `root_password`, `backup_password`, `exporter_password` under `/bmc/<env>/database/` (runbook, "Secrets").
 3. **AMI**:
    ```
    packer init ami/database && packer build -var version=1.0.0 ami/database
    ```
-4. **Environment**:
+4. **Environments**: from then on through pull requests and CI (below). Locally, for a plan only:
    ```
    cd environments/dev
    terraform init -backend-config="bucket=bmc-terraform-state-<account-id>"
    terraform plan
-   terraform apply
    ```
 
 Terraform ≥ 1.10 (S3 state locking without DynamoDB), AWS provider 6.x, Packer ≥ 1.11. CI uses Terraform 1.17.2 and Packer 1.16.2.
 
-## CI
+## CI/CD
 
-`.github/workflows/ci.yml` runs on every PR: `terraform fmt`, `terraform validate` and TFLint for `environments/dev`, `environments/prod` and `bootstrap`; `packer fmt` and `packer validate` for the AMI; ShellCheck for the AMI scripts. It has no AWS credentials and does not plan or apply. `ci-required` is the single check to require.
+| Trigger | Lint | Init + plan (dev, prod) | Apply dev | Apply prod |
+|---|---|---|---|---|
+| Pull request (any branch into `main`) | ✓ | ✓ | – | – |
+| Merge to `main` | ✓ | ✓ | ✓ if the dev plan has changes | ✓ if the prod plan has changes, after dev succeeded, **after approval** |
+
+- **Lint** (no AWS access): `terraform fmt`, `terraform validate` and TFLint for `environments/dev`, `environments/prod` and `bootstrap`; `packer fmt` and `packer validate`; ShellCheck.
+- **Plan** (`.github/workflows/terraform.yml`, role `bmc-github-plan`): read-only, cannot read bucket objects or secret values. The plan is shown in the job summary and saved as an artifact for one day.
+- **Apply** (same workflow, in the GitHub environment `dev` or `prod`, role `bmc-github-apply-<env>`): applies exactly the plan saved earlier in the same run; if the state changed in between, Terraform refuses and nothing changes.
+- Pull requests from forks stop after lint (GitHub gives them no OIDC token).
+- `ci-required` (lint and both plans) is the single check to require on `main`.
+- The bootstrap configuration is never applied by CI.
+- Not yet: the AMI build (`packer build`) in CI.
+
+## GitHub settings
+
+Values come from the outputs of `bootstrap/`. None of them is a secret.
+
+| Where | Name | Value |
+|---|---|---|
+| Repository variable | `AWS_REGION` | `eu-west-1` |
+| Repository variable | `TF_STATE_BUCKET` | `bmc-terraform-state-<account-id>` |
+| Repository variable | `AWS_PLAN_ROLE_ARN` | ARN of `bmc-github-plan` |
+| Environment `dev` | variable `AWS_APPLY_ROLE_ARN` | ARN of `bmc-github-apply-dev` |
+| Environment `dev` | deployment branches | `main` only |
+| Environment `prod` | variable `AWS_APPLY_ROLE_ARN` | ARN of `bmc-github-apply-prod` |
+| Environment `prod` | deployment branches | `main` only |
+| Environment `prod` | required reviewers | team `maintainers`, prevent self-review |
+| Ruleset `main-review` | required status check | `ci-required` |
+
+The `main`-only deployment branches matter: the apply roles trust any job running in that GitHub environment.
 
 ## Not here yet
 
 - The application host and its module (US-17), and how it deploys the images from the application repository (DEC-12 linking options).
-- `plan` / `apply` from GitHub Actions through AWS OIDC, and the AMI build pipeline.
+- The AMI build pipeline (Packer in CI).
 - Monitoring targets and alerts (US-20).
 
 ## Rules

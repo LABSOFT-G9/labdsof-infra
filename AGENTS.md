@@ -5,7 +5,7 @@ Infrastructure for BMC (ISEP LABDSOF 26/27). The team's shared rules, workflow a
 ## Non-negotiables
 
 - Never commit secrets, keys, state files or `*.tfvars` with secrets. Secrets live in SSM Parameter Store or GitHub environment secrets.
-- Never run `terraform apply` or `destroy`, or build or deregister an AMI, without the owner's explicit go-ahead; show the plan first.
+- Changes reach AWS only through a reviewed PR and CI: merging to `main` applies dev, and prod after approval. Never run `terraform apply` or `destroy` locally, or build or deregister an AMI, without the owner's explicit go-ahead; show the plan first.
 - Do not claim anything is deployed, applied or working without evidence (plan output, run link, AWS console or CLI output).
 - Do not force-push shared branches or rewrite published history.
 - Authors never approve their own changes.

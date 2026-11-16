@@ -1,9 +1,16 @@
 name: CI
 
-# Static checks only: no AWS credentials, nothing is planned or applied.
-# terraform fmt/validate per environment, TFLint, packer fmt/validate,
-# ShellCheck for the AMI scripts. Actions are pinned to full commit SHAs
-# resolved with `gh api` on 2026-11-16.
+# Branches / pull requests:  lint -> init + plan (dev, prod)
+# main (after merge):        lint -> init + plan (dev, prod) -> apply dev -> apply prod
+#
+# lint   no AWS access: terraform fmt / validate / TFLint, packer fmt / validate,
+#        ShellCheck
+# plan   terraform.yml with the read-only plan role; the plan is in the job summary
+# apply  terraform.yml applies the saved plan of the same run, only when it has
+#        changes. dev applies by itself; prod waits for a reviewer on the `prod`
+#        GitHub environment, and only after dev applied successfully.
+#
+# Pins: full commit SHAs resolved with `gh api` on 2026-11-16.
 
 on:
   pull_request:
@@ -14,13 +21,15 @@ on:
 permissions:
   contents: read
 
+# PRs: a new push cancels the older run. main: runs queue, never cancelled,
+# so an apply is never interrupted.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'push' && 'main' || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  terraform:
-    name: Terraform (${{ matrix.dir }})
+  lint-terraform:
+    name: Lint Terraform (${{ matrix.dir }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
@@ -45,11 +54,11 @@ jobs:
       - name: TFLint
         working-directory: ${{ matrix.dir }}
         run: |
-          tflint --init
+          tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
           tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
 
-  packer:
-    name: Packer (database AMI)
+  lint-ami:
+    name: Lint AMI (Packer, ShellCheck)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -67,13 +76,72 @@ jobs:
       - name: ShellCheck
         run: shellcheck ami/database/scripts/*.sh ami/database/files/*.sh
 
+  # Fork PRs get no OIDC token, so they stop at lint.
+  plan-dev:
+    name: Plan dev
+    needs: [lint-terraform, lint-ami]
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/terraform.yml
+    with:
+      environment: dev
+      mode: plan
+
+  plan-prod:
+    name: Plan prod
+    needs: [lint-terraform, lint-ami]
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/terraform.yml
+    with:
+      environment: prod
+      mode: plan
+
+  apply-dev:
+    name: Apply dev
+    needs: plan-dev
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.plan-dev.outputs.changes == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/terraform.yml
+    with:
+      environment: dev
+      mode: apply
+
+  # After dev: a change reaches prod only once it applied cleanly on dev (or
+  # dev had nothing to change). Waits for approval on the `prod` environment.
+  apply-prod:
+    name: Apply prod
+    needs: [plan-prod, apply-dev]
+    if: >-
+      always() &&
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.plan-prod.result == 'success' &&
+      needs.plan-prod.outputs.changes == 'true' &&
+      (needs.apply-dev.result == 'success' || needs.apply-dev.result == 'skipped')
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/terraform.yml
+    with:
+      environment: prod
+      mode: apply
+
+  # The single check to require on main.
   ci-required:
     name: ci-required
     if: always()
-    needs: [terraform, packer]
+    needs: [lint-terraform, lint-ami, plan-dev, plan-prod]
     runs-on: ubuntu-latest
     steps:
       - env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
         run: |
-          for r in $RESULTS; do [ "$r" = success ] || { echo "A job ended with $r"; exit 1; }; done
+          for r in $RESULTS; do
+            case "$r" in success|skipped) ;; *) echo "A job ended with $r"; exit 1;; esac
+          done
