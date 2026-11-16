@@ -81,11 +81,13 @@ Terraform ≥ 1.10 (S3 state locking without DynamoDB), AWS provider 6.x, Packer
 | Trigger | Lint | Init + plan (dev, prod) | Apply dev | Apply prod |
 |---|---|---|---|---|
 | Pull request (any branch into `main`) | ✓ | ✓ | – | – |
-| Merge to `main` | ✓ | ✓ | ✓ if the dev plan has changes | ✓ if the prod plan has changes, after dev succeeded, **after approval** |
+| Merge to `main` | ✓ | ✓ | ✓ applies the dev plan if it has changes | ✓ after dev succeeded and **after approval**; applies the prod plan if it has changes |
+
+Everything is in one workflow, `.github/workflows/ci.yml`; the branch decides how far it runs.
 
 - **Lint** (no AWS access): `terraform fmt`, `terraform validate` and TFLint for `environments/dev`, `environments/prod` and `bootstrap`; `packer fmt` and `packer validate`; ShellCheck.
-- **Plan** (`.github/workflows/terraform.yml`, role `bmc-github-plan`): read-only, cannot read bucket objects or secret values. The plan is shown in the job summary and saved as an artifact for one day.
-- **Apply** (same workflow, in the GitHub environment `dev` or `prod`, role `bmc-github-apply-<env>`): applies exactly the plan saved earlier in the same run; if the state changed in between, Terraform refuses and nothing changes.
+- **Plan** (job `plan`, one per environment, role `bmc-github-plan`): read-only, cannot read bucket objects or secret values. The plan is shown in the job summary and saved as an artifact for one day.
+- **Apply** (job `apply`, only on `main`, dev then prod, in the GitHub environment `dev` or `prod`, role `bmc-github-apply-<env>`): applies exactly the plan saved earlier in the same run; if the state changed in between, Terraform refuses and nothing changes. If dev fails, prod is cancelled. The `prod` approval is asked even when the prod plan has no changes (the job then ends without touching AWS), because a GitHub environment gates a whole job.
 - Pull requests from forks stop after lint (GitHub gives them no OIDC token).
 - `ci-required` (lint and both plans) is the single check to require on `main`.
 - The bootstrap configuration is never applied by CI.
