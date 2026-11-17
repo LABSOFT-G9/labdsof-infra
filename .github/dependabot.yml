@@ -1,0 +1,27 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "US-17"
+
+  # AWS provider versions in the lock files.
+  - package-ecosystem: terraform
+    directories: ["/environments/dev", "/environments/prod", "/bootstrap"]
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "US-17"
+
+  # MySQL and exporter digests baked into the database AMI.
+  - package-ecosystem: docker-compose
+    directory: /ami/database/files
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "US-17"

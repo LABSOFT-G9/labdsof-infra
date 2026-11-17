@@ -1,0 +1,24 @@
+#!/bin/bash
+# Rendered by Terraform (modules/database). Configuration only: the AMI's
+# bmc-database.service reads this file, mounts the data volume, fetches the
+# secrets from SSM and starts MySQL. No secret is written here.
+set -euo pipefail
+install -d -m 0755 /etc/bmc
+cat > /etc/bmc/database.env <<'EOF'
+BMC_ENVIRONMENT=${environment}
+AWS_REGION=${region}
+BMC_BACKUPS_BUCKET=${backups_bucket}
+BMC_PARAMETER_PREFIX=${parameter_prefix}
+BMC_DATA_VOLUME_ID=${data_volume_id}
+EOF
+chmod 0644 /etc/bmc/database.env
+
+install -d -m 0755 /etc/systemd/system/bmc-backup.timer.d
+cat > /etc/systemd/system/bmc-backup.timer.d/schedule.conf <<'EOF'
+[Timer]
+OnCalendar=
+OnCalendar=${backup_schedule}
+EOF
+
+systemctl daemon-reload
+systemctl enable --now bmc-database.service bmc-backup.timer

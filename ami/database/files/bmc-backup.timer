@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly BMC database backup
+
+[Timer]
+# UTC. Terraform can override it with a drop-in (backup_schedule).
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target
