@@ -16,7 +16,7 @@ variable "team" {
   type        = map(string)
   default = {
     martim  = "admin"
-    ricardo = "operator"
+    ricardo = "viewonly"
     pedro   = "viewonly"
     afonso  = "viewonly"
     sandro  = "viewonly"

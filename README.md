@@ -152,8 +152,7 @@ Each person has an IAM user with no permissions of its own, in one group that de
 | User | Group | Can switch into |
 |---|---|---|
 | `martim` | `bmc-admin-users` | admin, operator, viewonly |
-| `ricardo` | `bmc-operator-users` | operator, viewonly |
-| `pedro`, `afonso`, `sandro` | `bmc-viewonly-users` | viewonly |
+| `ricardo`, `pedro`, `afonso`, `sandro` | `bmc-viewonly-users` | viewonly |
 
 Adding, removing or changing someone is a PR to that map, applied by an admin. First sign-in:
 
