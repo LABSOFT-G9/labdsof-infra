@@ -118,7 +118,7 @@ Values come from the outputs of `bootstrap/`. None of them is a secret.
 
 | Where | Name | Value |
 |---|---|---|
-| Repository variable | `AWS_REGION` | `eu-west-1` |
+| Repository variable | `AWS_REGION` | `eu-north-1` |
 | Repository variable | `TF_STATE_BUCKET` | `bmc-terraform-state-<account-id>` |
 | Repository variable | `AWS_PLAN_ROLE_ARN` | ARN of `bmc-github-plan` |
 | Environment `dev` | variable `AWS_DEPLOY_ROLE_ARN` | ARN of `bmc-deploy-dev` |

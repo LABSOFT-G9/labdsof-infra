@@ -5,7 +5,7 @@
 # For a long-lived prod, set deletion_protection = true, force_destroy_buckets
 # = false and backup_lock_days > 0 (the lock needs a new backups bucket).
 environment                = "prod"
-region                     = "eu-west-1"
+region                     = "eu-north-1"
 vpc_cidr                   = "10.20.0.0/16"
 database_enabled           = false
 database_ami_version       = "1.0.0"
