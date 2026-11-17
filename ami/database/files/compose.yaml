@@ -26,7 +26,7 @@ services:
 
   mysqld-exporter:
     # prom/mysqld-exporter:v0.17.2
-    image: prom/mysqld-exporter:v0.17.2@sha256:20b5b23a98ce3998349042a999e56d22819b46da38fa4e4e9ca0155c975c95d5
+    image: prom/mysqld-exporter:v0.21.0@sha256:afad0c59a154fea24ca5ea0e6f95f2b0b168601b111266963dc8a347715b5318
     container_name: bmc-mysqld-exporter
     restart: unless-stopped
     command:
