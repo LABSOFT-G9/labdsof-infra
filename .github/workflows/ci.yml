@@ -1,19 +1,24 @@
 name: CI
 
-# One workflow; the branch decides how far it goes.
+# One workflow; what triggered it decides how far it goes.
 #
-#   any branch / pull request:  lint -> plan (dev, prod)
-#   main (after merge):         lint -> plan (dev, prod) -> apply dev -> apply prod
-#   manual (Run workflow):      lint -> destroy one environment
+#   pull request:            lint -> plan dev, plan prod
+#   main (after merge):      lint -> plan dev -> apply dev
+#   tag vX.Y.Z on main:      lint -> plan prod -> apply prod (after approval)
+#   manual (Run workflow):   lint -> destroy one environment
+#
+# Prod changes only through a release tag, so it gets exactly a commit that
+# was merged to main and already applied to dev:
+#   git tag v1.2.0 <commit on main> && git push origin v1.2.0
+# A tag on a commit that is not on main fails in plan, before touching AWS.
 #
 # lint   no AWS access: terraform fmt / validate / TFLint, packer fmt /
 #        validate, ShellCheck
 # plan   the plan is shown in the job summary and saved
-# apply  only on main, one environment at a time (dev first). Each runs in
-#        the GitHub environment of the same name: `prod` waits for a
-#        reviewer, who can read the prod plan of this run first. It applies
-#        exactly the saved plan, and does nothing when the plan had no changes.
-#        If dev fails, prod does not run.
+# apply  runs in the GitHub environment of the same name (`dev`: main only;
+#        `prod`: tags v* only, and waits for a reviewer, who can read the prod
+#        plan of this run first). It applies exactly the saved plan, and does
+#        nothing when the plan had no changes.
 #
 # AWS access: the access key of the IAM user bmc-ci (repository secrets), which
 # switches into the role bmc-admin. The AWS Organization denies GitHub OIDC.
@@ -25,8 +30,10 @@ on:
     branches: [main]
   push:
     branches: [main]
-  # Actions -> CI -> Run workflow (on main): tear an environment down after
-  # testing or a showcase. `prod` still waits for approval.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  # Actions -> CI -> Run workflow: tear an environment down after testing or a
+  # showcase. dev: run it on main; prod: run it on a release tag (the `prod`
+  # environment accepts only tags), and it still waits for approval.
   workflow_dispatch:
     inputs:
       destroy:
@@ -38,8 +45,8 @@ on:
 permissions:
   contents: read
 
-# PRs: a new push cancels the older run. main and destroy: runs queue in the
-# same group and are never cancelled, so an apply or destroy is never
+# PRs: a new push cancels the older run. main, tags and destroy: runs queue in
+# the same group and are never cancelled, so an apply or destroy is never
 # interrupted and never runs at the same time as another.
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || 'main' }}
@@ -70,6 +77,10 @@ jobs:
       - name: Terraform format
         run: terraform fmt -check -recursive -diff
       - name: Terraform validate and TFLint
+        env:
+          # tflint --init downloads the ruleset from GitHub releases; without a
+          # token the shared runner IPs hit the anonymous rate limit (403).
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
           for dir in environments/dev environments/prod bootstrap; do
@@ -97,7 +108,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        env: [dev, prod]
+        # PR: both; main: dev; release tag: prod.
+        env: ${{ fromJSON(github.event_name == 'pull_request' && '["dev","prod"]' || github.ref_type == 'tag' && '["prod"]' || '["dev"]') }}
     defaults:
       run:
         working-directory: environments/${{ matrix.env }}
@@ -105,6 +117,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # the tag check below needs main's history
+      - name: Release tag is on main
+        if: github.ref_type == 'tag'
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag ${GITHUB_REF_NAME} points to a commit that is not on main."
+            exit 1
+          fi
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           aws-region: ${{ vars.AWS_REGION }}
@@ -156,16 +176,15 @@ jobs:
   apply:
     name: Apply ${{ matrix.env }}
     needs: plan
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref_type == 'tag')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # `prod` has required reviewers.
     environment: ${{ matrix.env }}
     strategy:
-      max-parallel: 1 # dev, then prod
-      fail-fast: true # dev failed -> prod is cancelled
       matrix:
-        env: [dev, prod]
+        # main: dev; release tag: prod (the same list as plan).
+        env: ${{ fromJSON(github.ref_type == 'tag' && '["prod"]' || '["dev"]') }}
     defaults:
       run:
         working-directory: environments/${{ matrix.env }}
@@ -215,7 +234,10 @@ jobs:
   destroy:
     name: Destroy ${{ inputs.destroy }}
     needs: lint
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      ((inputs.destroy == 'dev' && github.ref == 'refs/heads/main') ||
+       (inputs.destroy == 'prod' && github.ref_type == 'tag'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: ${{ inputs.destroy }} # `prod` needs approval
