@@ -70,6 +70,10 @@ jobs:
       - name: Terraform format
         run: terraform fmt -check -recursive -diff
       - name: Terraform validate and TFLint
+        env:
+          # tflint --init downloads the ruleset from GitHub releases; without a
+          # token the shared runner IPs hit the anonymous rate limit (403).
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
           for dir in environments/dev environments/prod bootstrap; do
