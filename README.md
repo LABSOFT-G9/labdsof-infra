@@ -44,9 +44,9 @@ Both environments are short-lived: dev is created to test the setup and destroye
 
 ## Lifecycle: create, test, destroy
 
-1. **Create**: merge to `main`; CI plans and applies dev. Prod only when it is wanted: push a release tag on `main` (CI/CD below), and it applies after approval.
+1. **Create**: merge to `main` (CI only plans), then press the button: Actions → CI → Run workflow on `main`, environment `dev` or `prod`, action `apply`. `prod` waits for approval.
 2. **Test**: runbook checks (Session Manager, MySQL up, a manual backup lands in S3, a restore).
-3. **Destroy**: Actions → CI → Run workflow, choose `dev` (run it on `main`) or `prod` (run it on a release tag). It shows the destroy plan in the summary and removes everything in that environment, including the attachments and backups buckets. `prod` waits for approval.
+3. **Destroy**: the same button with action `destroy`. It shows the destroy plan in the summary and removes everything in that environment, including the attachments and backups buckets. `prod` waits for approval.
 4. **Clean up what Terraform does not own** (costs cents, but adds up):
    - old AMIs: deregister them and delete their snapshots (EC2 → AMIs, EC2 → Snapshots);
    - SSM parameters `/bmc/<env>/database/*` (free; delete if the environment will not come back).
@@ -107,22 +107,14 @@ Terraform ≥ 1.10, AWS provider 6.x, Packer ≥ 1.11. CI uses Terraform 1.17.2 
 | Trigger | Lint | Plan | Apply |
 |---|---|---|---|
 | Pull request (any branch into `main`) | ✓ | dev and prod | – |
-| Merge to `main` | ✓ | dev | dev, if the plan has changes |
-| Release tag `vX.Y.Z` on a commit on `main` | ✓ | prod | prod, **after approval**, if the plan has changes |
+| Merge to `main` | ✓ | dev and prod | – |
+| **Run workflow** button on `main` (environment, action) | ✓ | the chosen environment (a destroy plan for `destroy`) | apply or destroy it, if the plan has changes; `prod` **after approval** |
 
-Everything is in one workflow, `.github/workflows/ci.yml`; what triggered it decides how far it runs.
-
-**Releasing to prod**: choose a commit on `main` that dev already runs, tag it and push the tag:
-
-```
-git fetch origin && git tag v1.0.0 origin/main && git push origin v1.0.0
-```
-
-A tag on a commit that is not on `main` fails in plan, before touching AWS. To change prod again, merge to `main`, check dev, and push a new tag (`v1.0.1`, …); never move or reuse a tag.
+Everything is in one workflow, `.github/workflows/ci.yml`. Nothing changes in AWS until someone presses the button: Actions → CI → **Run workflow**, branch `main`, choose the environment (`dev` or `prod`) and the action (`apply` or `destroy`). The run plans first and shows the plan in its summary, then applies exactly that plan.
 
 - **Lint** (no AWS access): `terraform fmt`, `terraform validate` and TFLint for `environments/dev`, `environments/prod` and `bootstrap`; `packer fmt` and `packer validate`; ShellCheck.
 - **Plan** (job `plan`, one per environment, role `bmc-admin`): the plan is shown in the job summary and saved as an artifact for one day.
-- **Apply** (job `apply`: dev on `main`, prod on a release tag, in the GitHub environment of the same name, role `bmc-admin`): applies exactly the plan saved earlier in the same run; if the state changed in between, Terraform refuses and nothing changes. The `prod` approval is asked even when the prod plan has no changes (the job then ends without touching AWS), because a GitHub environment gates a whole job.
+- **Apply** (job `apply`, button only, on `main`, in the GitHub environment of the same name, role `bmc-admin`): applies exactly the plan saved earlier in the same run; if the state changed in between, Terraform refuses and nothing changes. The `prod` approval is asked even when the prod plan has no changes (the job then ends without touching AWS), because a GitHub environment gates a whole job.
 - Pull requests from forks stop after lint (GitHub gives them no secrets).
 - `ci-required` (lint and the plans) is the single check to require on `main`.
 - The bootstrap configuration is never applied by CI.
@@ -139,8 +131,7 @@ Values come from the outputs of `bootstrap/`. Only the two `AWS_*_KEY*` entries 
 | Repository variable | `TF_STATE_BUCKET` | `bmc-terraform-state-<account-id>` |
 | Repository variable | `AWS_ROLE_ARN` | output `admin_role_arn` (`bmc-admin`) |
 | Environment `dev` | deployment branches | `main` only |
-| Environment `prod` | deployment branches and tags | tags `v*` only (no branches) |
-| Ruleset on tags `v*` | restrict creations, updates, deletions | only maintainers may push, move or delete release tags |
+| Environment `prod` | deployment branches | `main` only |
 | Environment `prod` | required reviewers | team `maintainers`, prevent self-review |
 | Ruleset `main-review` | required status check | `ci-required` |
 
@@ -159,7 +150,7 @@ People sign in through the Organization's own access (`aws login`), not through 
 What this means:
 
 - **Anyone who can push a branch to this repository gets admin rights in the account**: the plan runs on pull requests with the same role, and a changed workflow can use the secrets. Keep write access to the repository to the team, review workflow changes, and protect `main`.
-- `prod` is protected only by its GitHub environment (approval, release tags only) and the tag ruleset, not by AWS permissions.
+- `prod` is protected only by its GitHub environment (approval, `main` only), not by AWS permissions.
 - The access key does not expire: rotate it (First-time setup), and delete it at once if it may have leaked.
 
 ## Not here yet
