@@ -1,3 +1,5 @@
+# tflint-ignore-file: terraform_unused_declarations # main.tf is commented out
+
 variable "environment" {
   type = string
 }
