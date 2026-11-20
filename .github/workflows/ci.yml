@@ -8,16 +8,17 @@ name: CI
 #
 # lint   no AWS access: terraform fmt / validate / TFLint, packer fmt /
 #        validate, ShellCheck
-# plan   read-only role; the plan is shown in the job summary and saved
+# plan   the plan is shown in the job summary and saved
 # apply  only on main, one environment at a time (dev first). Each runs in
 #        the GitHub environment of the same name: `prod` waits for a
 #        reviewer, who can read the prod plan of this run first. It applies
 #        exactly the saved plan, and does nothing when the plan had no changes.
 #        If dev fails, prod does not run.
 #
-# AWS access is GitHub OIDC (no stored keys); roles and the state bucket come
-# from bootstrap/ (README "GitHub settings"). Pins: full commit SHAs resolved
-# with `gh api` on 2026-11-16.
+# AWS access: the access key of the IAM user bmc-ci (repository secrets), which
+# switches into the role bmc-admin. The AWS Organization denies GitHub OIDC.
+# The user, the role and the state bucket come from bootstrap/ (README "GitHub
+# settings"). Pins: full commit SHAs resolved with `gh api` on 2026-11-16.
 
 on:
   pull_request:
@@ -89,13 +90,10 @@ jobs:
   plan:
     name: Plan ${{ matrix.env }}
     needs: lint
-    # Fork PRs get no OIDC token, so they stop at lint.
+    # Fork PRs get no secrets, so they stop at lint.
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    permissions:
-      contents: read
-      id-token: write # GitHub OIDC token for AWS
     strategy:
       fail-fast: false
       matrix:
@@ -110,7 +108,10 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           aws-region: ${{ vars.AWS_REGION }}
-          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-duration-seconds: 3600
           role-session-name: gh-plan-${{ matrix.env }}-${{ github.run_id }}
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
@@ -158,12 +159,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # The deploy role trusts only jobs in this GitHub environment (OIDC subject
-    # repo:...:environment:<env>); `prod` has required reviewers.
+    # `prod` has required reviewers.
     environment: ${{ matrix.env }}
-    permissions:
-      contents: read
-      id-token: write
     strategy:
       max-parallel: 1 # dev, then prod
       fail-fast: true # dev failed -> prod is cancelled
@@ -192,7 +189,10 @@ jobs:
         if: steps.check.outputs.changes == 'true'
         with:
           aws-region: ${{ vars.AWS_REGION }}
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }} # variable on the dev / prod environment
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-duration-seconds: 3600
           role-session-name: gh-deploy-${{ matrix.env }}-${{ github.run_id }}
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         if: steps.check.outputs.changes == 'true'
@@ -218,10 +218,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    environment: ${{ inputs.destroy }} # same deploy role; `prod` needs approval
-    permissions:
-      contents: read
-      id-token: write
+    environment: ${{ inputs.destroy }} # `prod` needs approval
     defaults:
       run:
         working-directory: environments/${{ inputs.destroy }}
@@ -232,7 +229,10 @@ jobs:
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           aws-region: ${{ vars.AWS_REGION }}
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-duration-seconds: 3600
           role-session-name: gh-destroy-${{ inputs.destroy }}-${{ github.run_id }}
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
         with:
