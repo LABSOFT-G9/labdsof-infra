@@ -18,7 +18,7 @@ modules/                 internal modules, no environment-specific values
 environments/
   dev/                   calls the modules with dev values (terraform.tfvars)
   prod/                  the same modules with prod values
-bootstrap/               one-time: the S3 bucket for Terraform state
+bootstrap/               one-time: the S3 bucket for Terraform state, the CI user and the bmc-admin role
 ami/database/            Packer template, hardening and install scripts, compose.yaml, systemd units
 docs/runbooks/           operating procedures
 ```
@@ -50,7 +50,7 @@ Both environments are short-lived: dev is created to test the setup and destroye
 4. **Clean up what Terraform does not own** (costs cents, but adds up):
    - old AMIs: deregister them and delete their snapshots (EC2 → AMIs, EC2 → Snapshots);
    - SSM parameters `/bmc/<env>/database/*` (free; delete if the environment will not come back).
-5. **Keep**: the bootstrap state bucket and the GitHub roles (free or cents), so the next create works without setup.
+5. **Keep**: the bootstrap state bucket, `bmc-ci` and `bmc-admin` (free or cents), so the next create works without setup.
 
 Until the next create, nothing in the environment costs anything.
 
@@ -70,14 +70,21 @@ Details and procedures: [docs/runbooks/database.md](docs/runbooks/database.md).
 
 ## First-time setup (per AWS account)
 
-1. **Bootstrap: state bucket and IAM** (admin credentials, for example AWS CloudShell). Creates the single state bucket, the GitHub OIDC provider, the plan and deploy roles, the workload boundary, and the team roles, groups and users. Its own state ends up in the same bucket:
+1. **Bootstrap: state bucket and CI access** (admin credentials, for example `aws login` or AWS CloudShell). Creates the single state bucket, the IAM user `bmc-ci`, the role `bmc-admin` and the workload boundary. Its own state ends up in the same bucket:
    ```
    cd bootstrap
    mv backend.tf backend.tf.off && terraform init && terraform apply   # first run: local state
    mv backend.tf.off backend.tf
    terraform init -migrate-state -backend-config="bucket=$(terraform output -raw state_bucket)"
    ```
-   Later runs: `terraform init -backend-config="bucket=bmc-terraform-state-<account-id>"`, then plan and apply. Then set the GitHub settings below from the outputs.
+   Later runs: `terraform init -backend-config="bucket=bmc-terraform-state-<account-id>"`, then plan and apply. Then create the CI access key by hand, so that it is never in Terraform or its state, and store it straight in GitHub:
+   ```
+   aws iam create-access-key --user-name bmc-ci --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text \
+     | { read -r id secret
+         gh secret set AWS_ACCESS_KEY_ID --repo LABSOFT-G9/labdsof-infra --body "$id"
+         gh secret set AWS_SECRET_ACCESS_KEY --repo LABSOFT-G9/labdsof-infra --body "$secret"; }
+   ```
+   Then set the GitHub settings below from the outputs. To rotate the key: create a new one the same way, check a CI run, then `aws iam delete-access-key --user-name bmc-ci --access-key-id <old id>` (a user has at most two keys).
 2. **Environments** through pull requests and CI (below). The first deploy creates the network and the buckets; the database host stays off (`database_enabled = false`) until the database AMI exists.
 3. **Later, for the database host**: the secrets (runbook, "Secrets"), the AMI (`packer init ami/database && packer build -var version=1.0.0 ami/database`), then `database_enabled = true` in a PR.
 
@@ -87,9 +94,9 @@ One bucket, `bmc-terraform-state-<account-id>`, one folder per configuration:
 
 | Folder | Configuration | Read and write |
 |---|---|---|
-| `bootstrap/` | `bootstrap/` | admins only |
-| `dev/` | `environments/dev` | `bmc-deploy-dev`; `bmc-github-plan` reads and locks |
-| `prod/` | `environments/prod` | `bmc-deploy-prod`; `bmc-github-plan` reads and locks |
+| `bootstrap/` | `bootstrap/` | admins, by hand |
+| `dev/` | `environments/dev` | CI (`bmc-admin`) |
+| `prod/` | `environments/prod` | CI (`bmc-admin`) |
 
 Versioned, encrypted, no public access, locked with S3 lock files (no DynamoDB), protected from `terraform destroy`.
 
@@ -105,62 +112,45 @@ Terraform ≥ 1.10, AWS provider 6.x, Packer ≥ 1.11. CI uses Terraform 1.17.2 
 Everything is in one workflow, `.github/workflows/ci.yml`; the branch decides how far it runs.
 
 - **Lint** (no AWS access): `terraform fmt`, `terraform validate` and TFLint for `environments/dev`, `environments/prod` and `bootstrap`; `packer fmt` and `packer validate`; ShellCheck.
-- **Plan** (job `plan`, one per environment, role `bmc-github-plan`): read-only, cannot read bucket objects or secret values. The plan is shown in the job summary and saved as an artifact for one day.
-- **Apply** (job `apply`, only on `main`, dev then prod, in the GitHub environment `dev` or `prod`, role `bmc-deploy-<env>`): applies exactly the plan saved earlier in the same run; if the state changed in between, Terraform refuses and nothing changes. If dev fails, prod is cancelled. The `prod` approval is asked even when the prod plan has no changes (the job then ends without touching AWS), because a GitHub environment gates a whole job.
-- Pull requests from forks stop after lint (GitHub gives them no OIDC token).
+- **Plan** (job `plan`, one per environment, role `bmc-admin`): the plan is shown in the job summary and saved as an artifact for one day.
+- **Apply** (job `apply`, only on `main`, dev then prod, in the GitHub environment `dev` or `prod`, role `bmc-admin`): applies exactly the plan saved earlier in the same run; if the state changed in between, Terraform refuses and nothing changes. If dev fails, prod is cancelled. The `prod` approval is asked even when the prod plan has no changes (the job then ends without touching AWS), because a GitHub environment gates a whole job.
+- Pull requests from forks stop after lint (GitHub gives them no secrets).
 - `ci-required` (lint and both plans) is the single check to require on `main`.
 - The bootstrap configuration is never applied by CI.
 - Not yet: the AMI build (`packer build`) in CI.
 
 ## GitHub settings
 
-Values come from the outputs of `bootstrap/`. None of them is a secret.
+Values come from the outputs of `bootstrap/`. Only the two `AWS_*_KEY*` entries are secrets.
 
 | Where | Name | Value |
 |---|---|---|
-| Repository variable | `AWS_REGION` | `eu-west-1` |
+| Repository secret | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | access key of `bmc-ci` (First-time setup) |
+| Repository variable | `AWS_REGION` | `eu-north-1` |
 | Repository variable | `TF_STATE_BUCKET` | `bmc-terraform-state-<account-id>` |
-| Repository variable | `AWS_PLAN_ROLE_ARN` | ARN of `bmc-github-plan` |
-| Environment `dev` | variable `AWS_DEPLOY_ROLE_ARN` | ARN of `bmc-deploy-dev` |
+| Repository variable | `AWS_ROLE_ARN` | output `admin_role_arn` (`bmc-admin`) |
 | Environment `dev` | deployment branches | `main` only |
-| Environment `prod` | variable `AWS_DEPLOY_ROLE_ARN` | ARN of `bmc-deploy-prod` |
 | Environment `prod` | deployment branches | `main` only |
 | Environment `prod` | required reviewers | team `maintainers`, prevent self-review |
 | Ruleset `main-review` | required status check | `ci-required` |
 
-The `main`-only deployment branches matter: the deploy roles trust any job running in that GitHub environment.
+## AWS access
 
-## AWS roles
+The AWS Organization this account belongs to denies, with a service control policy, creating an OIDC provider, IAM groups and console passwords. So CI cannot use GitHub OIDC, and people cannot get IAM users of their own. What `bootstrap/` creates instead:
 
-All created by `bootstrap/` (applied once by an admin, by hand). IAM is free on the AWS free plan; IAM Identity Center is not available without upgrading, so people use plain IAM.
-
-| Role | Used by | Can |
+| Identity | Used by | Can |
 |---|---|---|
-| `bmc-github-plan` | CI, every branch and PR | read-only; write only the state lock; no bucket contents, no secret values |
-| `bmc-deploy-dev` | CI on `main`, GitHub environment `dev` | deploy (apply, destroy) **dev only**: EC2/VPC resources tagged `Environment=dev`, buckets `bmc-dev-*`, roles and instance profiles `bmc-dev-*` (with the workload boundary), its own state file, one region |
-| `bmc-deploy-prod` | CI on `main`, GitHub environment `prod`, after approval | the same, for prod only |
-| `bmc-admin` | people (switch role, MFA) | everything; emergencies only |
-| `bmc-operator` | people (switch role, MFA) | view everything; start, stop, reboot BMC instances; Session Manager; read backups and logs. No creating or deleting infrastructure |
-| `bmc-viewonly` | people (switch role, MFA) | view resources, settings, costs and metrics; no data, no secrets |
+| IAM user `bmc-ci` | CI, every job, with its access key | only switch into `bmc-admin` |
+| Role `bmc-admin` | CI (plan, apply, destroy), sessions of one hour | everything (AdministratorAccess) |
+| Policy `bmc-workload-boundary` | workload roles such as `bmc-<env>-database` | at most Session Manager and the `bmc-*` buckets |
 
-The deploy roles have no admin rights. Every role they create (for example `bmc-dev-database`) must carry the permissions boundary `bmc-workload-boundary` (SSM and the `bmc-*` buckets only), so a deploy role cannot create a more powerful role for itself; it can attach only AWS's `AmazonSSMManagedInstanceCore` policy, cannot remove a boundary, and cannot retag a resource into the other environment. When a new kind of resource is added and an apply fails with `AccessDenied`, add exactly the missing action to `bootstrap/github-oidc.tf` in a reviewed PR. These policies have not been run against AWS yet; the first dev apply is their test.
+People sign in through the Organization's own access (`aws login`), not through anything created here.
 
-### Team access
+What this means:
 
-Each person has an IAM user with no permissions of its own, in one group that decides which roles they may switch into (`team` in `bootstrap/team-access.tf`):
-
-| User | Group | Can switch into |
-|---|---|---|
-| `martim` | `bmc-admin-users` | admin, operator, viewonly |
-| `ricardo`, `pedro`, `afonso`, `sandro` | `bmc-viewonly-users` | viewonly |
-
-Adding, removing or changing someone is a PR to that map, applied by an admin. First sign-in:
-
-1. The admin creates a one-time console password for the user (IAM → Users → Security credentials → Enable console access, "must change at next sign-in") and sends it privately.
-2. The person signs in at `https://<account-id>.signin.aws.amazon.com/console`, sets a new password (14+ characters) and assigns an MFA device to their own user.
-3. They sign out and in again with MFA, then **Switch role**: account ID and role name (for example `bmc-operator`). Sessions last one hour.
-
-No access keys for people; the root user has MFA and is not used day to day.
+- **Anyone who can push a branch to this repository gets admin rights in the account**: the plan runs on pull requests with the same role, and a changed workflow can use the secrets. Keep write access to the repository to the team, review workflow changes, and protect `main`.
+- `prod` is protected only by its GitHub environment (approval, `main` only), not by AWS permissions.
+- The access key does not expire: rotate it (First-time setup), and delete it at once if it may have leaked.
 
 ## Not here yet
 

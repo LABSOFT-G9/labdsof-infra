@@ -1,6 +1,6 @@
 # Database host runbook
 
-Applies to `dev` and `prod`; replace `<env>` and `<account>`. Commands assume admin AWS credentials and region `eu-west-1`.
+Applies to `dev` and `prod`; replace `<env>` and `<account>`. Commands assume admin AWS credentials and region `eu-north-1`.
 
 ## Secrets
 
