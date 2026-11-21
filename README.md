@@ -53,7 +53,7 @@ Prod gets the same layout once dev is settled. Software on the hosts is added ca
 ```
 dev VPC 10.10.0.0/16, one availability zone (eu-north-1a)
 ├─ Public subnet  10.10.0.0/24  route 0.0.0.0/0 -> internet gateway
-│    └─ Edge host  t3.micro, Elastic IP. NAT for the private subnet;
+│    └─ Edge host  t3.micro, public IP (changes on stop/start). NAT for the private subnet;
 │                  forwards TCP 80/443 to the application host
 └─ Private subnet 10.10.1.0/24  route 0.0.0.0/0 -> edge host
      ├─ Application host  m7i-flex.large (8 GiB), 10.10.1.10, no public IP; plain server,
@@ -77,6 +77,7 @@ S3 gateway endpoint on both route tables (free)
 
 1. **Create**: merge to `main`. The run plans dev and prod, then each environment whose plan has changes waits for approval: open the run, read the plan in its summary, **Review deployments** → approve. dev applies first, prod only after dev succeeded. To apply without a new merge, use the button: Actions → CI → Run workflow on `main`, environment, action `apply`.
 2. **Test**: runbook checks (Session Manager, MySQL up, a manual backup lands in S3, a restore).
+2b. **Pause**: the button with action `stop` stops every instance of the environment: no instance hours are billed, the disks (and MySQL data) and buckets stay. `start` brings it back in a minute or two, the edge host first. The edge host's public IP changes on every start. While stopped, dev costs only its disks (about USD 6.70 a month).
 3. **Destroy**: the button with action `destroy`. It shows the destroy plan in the summary and removes everything in that environment, including the attachments and backups buckets. `prod` waits for approval.
 4. **Clean up what Terraform does not own** (costs cents, but adds up):
    - old AMIs: deregister them and delete their snapshots (EC2 → AMIs, EC2 → Snapshots);
@@ -151,6 +152,7 @@ Terraform ≥ 1.10, AWS provider 6.x, Packer ≥ 1.11. CI uses Terraform 1.17.2 
 | Pull request (any branch into `main`) | ✓ | dev and prod | – |
 | **Merge to `main`** | ✓ | dev and prod | each environment **with changes**, after **approval**: dev first, prod only after dev succeeded |
 | **Run workflow** button on `main` (environment, action) | ✓ | the chosen environment (a destroy plan for `destroy`) | apply or destroy it, if the plan has changes, after **approval** |
+| **Run workflow** button, action `stop` / `start` | ✓ | – | stops or starts the environment's instances, after **approval** (start: edge host first) |
 
 Everything is in one workflow, `.github/workflows/ci.yml`. Nothing changes in AWS without an approval: the apply job waits in the run with **Review deployments**, and the plan it will apply is in the run's summary. An environment whose plan has no changes gets no apply job and asks for nothing. The button is for destroying, or for applying without a new merge.
 

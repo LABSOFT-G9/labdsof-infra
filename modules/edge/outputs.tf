@@ -1,6 +1,6 @@
 output "public_ip" {
-  description = "Fixed public address (Elastic IP): point DNS here."
-  value       = aws_eip.edge.public_ip
+  description = "Current public address; it changes when the host is stopped and started."
+  value       = aws_instance.edge.public_ip
 }
 
 output "private_ip" {

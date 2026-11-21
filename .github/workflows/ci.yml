@@ -10,6 +10,9 @@ name: CI
 #                            after approval (Actions -> CI -> Run workflow, on
 #                            main; choose the environment and the action). For
 #                            destroying, or re-applying without a new merge.
+#                            stop / start: lint -> power, after approval: stops
+#                            or starts the environment's instances (no plan; the
+#                            Terraform state does not change).
 #
 # lint     no AWS access: terraform fmt / validate / TFLint, packer fmt /
 #          validate, ansible-lint, ShellCheck
@@ -38,9 +41,9 @@ on:
         options: [dev, prod]
         required: true
       action:
-        description: "apply: create or update it; destroy: remove everything in it, including its buckets"
+        description: "apply: create or update it; destroy: remove everything in it, including its buckets; stop: stop its instances (disks and data kept); start: start them again"
         type: choice
-        options: [apply, destroy]
+        options: [apply, destroy, stop, start]
         default: apply
         required: true
 
@@ -109,8 +112,10 @@ jobs:
   plan:
     name: Plan ${{ matrix.env }}
     needs: lint
-    # Fork PRs get no secrets, so they stop at lint.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Fork PRs get no secrets, so they stop at lint. stop/start need no plan.
+    if: >-
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) &&
+      inputs.action != 'stop' && inputs.action != 'start'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -181,7 +186,7 @@ jobs:
   changes:
     name: Changes
     needs: plan
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (inputs.action == 'apply' || inputs.action == 'destroy')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -255,6 +260,70 @@ jobs:
       # attachments and backups; the state file stays (empty).
       - name: Apply
         run: terraform apply -lock-timeout=5m tfplan
+
+  # Stop or start the environment's instances (tag Environment=<env>). Stopped
+  # instances cost nothing; their disks keep their data and are still billed.
+  # start brings the edge host up first, so the private hosts have NAT when
+  # they boot. The Terraform state does not change.
+  power:
+    name: ${{ inputs.action }} ${{ inputs.environment }}
+    needs: lint
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && (inputs.action == 'stop' || inputs.action == 'start')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-duration-seconds: 3600
+          role-session-name: gh-${{ inputs.action }}-${{ inputs.environment }}-${{ github.run_id }}
+      - name: ${{ inputs.action }} the instances
+        env:
+          ACTION: ${{ inputs.action }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: |
+          ids() { # instance IDs of this environment in the given states, optionally only the edge host
+            local name_filter=()
+            [ "${2:-}" = edge ] && name_filter=(Name=tag:Name,Values="bmc-${ENVIRONMENT}-edge")
+            aws ec2 describe-instances \
+              --filters Name=tag:Project,Values=bmc Name=tag:Environment,Values="$ENVIRONMENT" \
+                        Name=instance-state-name,Values="$1" "${name_filter[@]}" \
+              --query 'Reservations[].Instances[].InstanceId' --output text
+          }
+          if [ "$ACTION" = stop ]; then
+            todo=$(ids running,pending)
+            if [ -z "$todo" ]; then echo "Nothing running in $ENVIRONMENT."; exit 0; fi
+            # shellcheck disable=SC2086 # word splitting is the point: one ID per word
+            aws ec2 stop-instances --instance-ids $todo --query 'StoppingInstances[].[InstanceId,CurrentState.Name]' --output text
+            # shellcheck disable=SC2086
+            aws ec2 wait instance-stopped --instance-ids $todo
+          else
+            edge=$(ids stopped edge)
+            if [ -n "$edge" ]; then
+              aws ec2 start-instances --instance-ids "$edge" --query 'StartingInstances[].[InstanceId,CurrentState.Name]' --output text
+              aws ec2 wait instance-running --instance-ids "$edge"
+            fi
+            rest=$(ids stopped)
+            if [ -n "$rest" ]; then
+              # shellcheck disable=SC2086
+              aws ec2 start-instances --instance-ids $rest --query 'StartingInstances[].[InstanceId,CurrentState.Name]' --output text
+              # shellcheck disable=SC2086
+              aws ec2 wait instance-running --instance-ids $rest
+            fi
+          fi
+          {
+            echo "## ${ACTION} ${ENVIRONMENT}"
+            echo '```'
+            aws ec2 describe-instances \
+              --filters Name=tag:Project,Values=bmc Name=tag:Environment,Values="$ENVIRONMENT" \
+                        Name=instance-state-name,Values=pending,running,stopping,stopped \
+              --query 'Reservations[].Instances[].[Tags[?Key==`Name`]|[0].Value,State.Name,PublicIpAddress]' --output text
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
 
   # The single check to require on main (lint and the plans).
   ci-required:
