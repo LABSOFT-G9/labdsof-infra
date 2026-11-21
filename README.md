@@ -15,6 +15,7 @@ modules/                 internal modules, no environment-specific values
   network/               VPC, public + private subnet, S3 gateway endpoint, optional SSM endpoints, locked default security group
   edge/                  the only public host: NAT for the private subnet, forwards 80/443 to the application host
   app/                   application host: plain EC2 in the private subnet, security group, IAM role
+  monitoring/            monitoring host: plain EC2 in the private subnet; accepts pushed metrics (9090) and logs (3100)
   storage/               S3 buckets: attachments and backups (private, encrypted, versioned, lifecycle)
   database/              EC2 database host from the AMI, encrypted data volume, IAM role, security group
 environments/
@@ -56,14 +57,17 @@ dev VPC 10.10.0.0/16, one availability zone
 └─ Private subnet 10.10.1.0/24  route 0.0.0.0/0 -> edge host
      ├─ Application host  t4g.large, 10.10.1.10, no public IP; plain server,
      │                    nothing installed yet
+     ├─ Monitoring host   t4g.small, 10.10.1.20, no public IP; plain server,
+     │                    nothing installed yet (Prometheus, Loki, Grafana later)
      └─ Database host     module ready, off (database_enabled = false)
 S3 gateway endpoint on both route tables (free)
 ```
 
 - Web traffic: internet -> edge host :80/443 -> application host. The client's address is kept. Nothing answers yet: the application host has no software.
 - The private hosts reach the internet only outbound, through the edge host's NAT; nothing on the internet can open a connection to them.
+- Monitoring is push-based: the edge, application and database hosts may send metrics (9090) and logs (3100) to the monitoring host, and nothing else reaches it. Grafana will be reached through Session Manager port forwarding, not exposed.
 - The edge host runs only the NAT and forwarding rules (nftables, `modules/edge/user-data.sh.tftpl`); no application code, no secrets.
-- Both hosts: Amazon Linux 2023, IMDSv2 only, encrypted disks, administered through SSM Session Manager; no SSH port.
+- All hosts: Amazon Linux 2023, IMDSv2 only, encrypted disks, administered through SSM Session Manager; no SSH port.
 - The VPC's default security group has no rules, so anything launched without a security group has no network access.
 
 ## Lifecycle: create, test, destroy

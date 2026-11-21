@@ -42,3 +42,12 @@ output "app_instance_id" {
   description = "For SSM Session Manager: aws ssm start-session --target <id>"
   value       = one(module.app[*].instance_id)
 }
+
+output "monitoring_private_ip" {
+  value = one(module.monitoring[*].private_ip)
+}
+
+output "monitoring_instance_id" {
+  description = "For SSM Session Manager (and port forwarding to Grafana): aws ssm start-session --target <id>"
+  value       = one(module.monitoring[*].instance_id)
+}

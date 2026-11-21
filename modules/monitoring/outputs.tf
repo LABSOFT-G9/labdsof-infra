@@ -1,0 +1,13 @@
+output "private_ip" {
+  description = "Where the other hosts push metrics (9090) and logs (3100)."
+  value       = aws_instance.monitoring.private_ip
+}
+
+output "instance_id" {
+  description = "For SSM Session Manager (and port forwarding to Grafana): aws ssm start-session --target <id>"
+  value       = aws_instance.monitoring.id
+}
+
+output "security_group_id" {
+  value = aws_security_group.monitoring.id
+}

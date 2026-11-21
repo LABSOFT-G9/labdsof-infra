@@ -35,26 +35,28 @@ resource "aws_security_group" "database" {
   tags = { Name = "${var.name}-database" }
 }
 
+# count, not for_each: the group IDs may not be known until apply.
 resource "aws_vpc_security_group_ingress_rule" "mysql" {
-  for_each = toset(var.client_security_group_ids)
+  count = length(var.client_security_group_ids)
 
   security_group_id            = aws_security_group.database.id
   description                  = "MySQL"
   ip_protocol                  = "tcp"
   from_port                    = 3306
   to_port                      = 3306
-  referenced_security_group_id = each.value
+  referenced_security_group_id = var.client_security_group_ids[count.index]
 }
 
+# count, not for_each: the group IDs may not be known until apply.
 resource "aws_vpc_security_group_ingress_rule" "exporter" {
-  for_each = toset(var.monitoring_security_group_ids)
+  count = length(var.monitoring_security_group_ids)
 
   security_group_id            = aws_security_group.database.id
   description                  = "mysqld_exporter metrics"
   ip_protocol                  = "tcp"
   from_port                    = 9104
   to_port                      = 9104
-  referenced_security_group_id = each.value
+  referenced_security_group_id = var.monitoring_security_group_ids[count.index]
 }
 
 # Outbound HTTPS only: SSM, S3 and package mirrors. No SSH is opened; admins
@@ -66,6 +68,18 @@ resource "aws_vpc_security_group_egress_rule" "https" {
   from_port         = 443
   to_port           = 443
   cidr_ipv4         = "0.0.0.0/0"
+}
+
+# Push metrics (9090) and logs (3100) to the monitoring host, when there is one.
+resource "aws_vpc_security_group_egress_rule" "monitoring" {
+  for_each = var.monitoring_ip == null ? {} : { metrics = 9090, logs = 3100 }
+
+  security_group_id = aws_security_group.database.id
+  description       = "Push ${each.key} to the monitoring host"
+  ip_protocol       = "tcp"
+  from_port         = each.value
+  to_port           = each.value
+  cidr_ipv4         = "${var.monitoring_ip}/32"
 }
 
 # --- Permissions (least privilege) -----------------------------------------

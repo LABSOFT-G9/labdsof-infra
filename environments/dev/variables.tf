@@ -30,6 +30,21 @@ variable "app_architecture" {
   type        = string
 }
 
+variable "monitoring_enabled" {
+  description = "Create the monitoring host."
+  type        = bool
+}
+
+variable "monitoring_instance_type" {
+  description = "Monitoring host instance type."
+  type        = string
+}
+
+variable "monitoring_architecture" {
+  description = "arm64 or x86_64; must match monitoring_instance_type."
+  type        = string
+}
+
 variable "database_enabled" {
   description = "Create the database host. Needs a bmc-database AMI to exist."
   type        = bool

@@ -11,9 +11,11 @@ locals {
   name = "bmc-${var.environment}"
   # Created by bootstrap/; every workload role must carry it.
   workload_boundary_arn = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:policy/bmc-workload-boundary"
-  # Fixed address of the application host in the private subnet (10.x.1.0/24),
-  # known before it exists, so the edge host does not wait for it.
-  app_private_ip = cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 10)
+  # Fixed addresses in the private subnet (10.x.1.0/24), known before the
+  # hosts exist, so the hosts that point at them do not wait for them.
+  app_private_ip        = cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 10)
+  monitoring_private_ip = cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 20)
+  monitoring_ip         = var.monitoring_enabled ? local.monitoring_private_ip : null
 }
 
 module "network" {
@@ -52,6 +54,28 @@ module "app" {
   vpc_cidr             = var.vpc_cidr
   subnet_id            = module.network.private_subnet_id
   private_ip           = local.app_private_ip
+  monitoring_ip        = local.monitoring_ip
+  deletion_protection  = var.deletion_protection
+  permissions_boundary = local.workload_boundary_arn
+}
+
+# Plain host for now: Prometheus, Loki and Grafana are added later. The edge,
+# application and database hosts may push metrics and logs to it.
+module "monitoring" {
+  source = "../../modules/monitoring"
+  count  = var.monitoring_enabled ? 1 : 0
+
+  name          = local.name
+  instance_type = var.monitoring_instance_type
+  architecture  = var.monitoring_architecture
+  vpc_id        = module.network.vpc_id
+  subnet_id     = module.network.private_subnet_id
+  private_ip    = local.monitoring_private_ip
+  client_security_group_ids = concat(
+    [module.edge.security_group_id],
+    module.app[*].security_group_id,
+    module.database[*].security_group_id,
+  )
   deletion_protection  = var.deletion_protection
   permissions_boundary = local.workload_boundary_arn
 }
@@ -80,7 +104,9 @@ module "database" {
   data_volume_size          = var.database_volume_size
   deletion_protection       = var.deletion_protection
   client_security_group_ids = module.app[*].security_group_id
-  backups_bucket            = module.storage.backups_bucket
-  backups_bucket_arn        = module.storage.backups_bucket_arn
-  permissions_boundary      = local.workload_boundary_arn
+  # Agents push to the monitoring host; nothing scrapes the database host.
+  monitoring_ip        = local.monitoring_ip
+  backups_bucket       = module.storage.backups_bucket
+  backups_bucket_arn   = module.storage.backups_bucket_arn
+  permissions_boundary = local.workload_boundary_arn
 }

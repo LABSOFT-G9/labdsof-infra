@@ -54,3 +54,9 @@ variable "permissions_boundary" {
   description = "ARN of the IAM permissions boundary every workload role must carry (bootstrap policy bmc-workload-boundary)."
   type        = string
 }
+
+variable "monitoring_ip" {
+  description = "Private IP of the monitoring host, to allow pushing metrics (9090) and logs (3100) to it. Null: no monitoring host."
+  type        = string
+  default     = null
+}
