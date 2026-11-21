@@ -1,0 +1,38 @@
+---
+# Base OS hardening for Ubuntu hosts built into images. Running hosts are not
+# patched in place: build a new image version instead.
+
+- name: Install all updates available at build time
+  ansible.builtin.apt:
+    update_cache: true
+    upgrade: safe
+
+- name: Remove automatic updates (patching is a new image version)
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: absent
+    purge: true
+
+- name: SSH without passwords and without root login (no SSH port is open anyway; admins use Session Manager)
+  ansible.builtin.copy:
+    dest: /etc/ssh/sshd_config.d/10-bmc.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+
+- name: Kernel network settings for a host that does not route traffic
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-bmc.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      net.ipv4.conf.all.accept_redirects = 0
+      net.ipv4.conf.default.accept_redirects = 0
+      net.ipv4.conf.all.send_redirects = 0
+      net.ipv4.conf.all.accept_source_route = 0
+      net.ipv4.tcp_syncookies = 1

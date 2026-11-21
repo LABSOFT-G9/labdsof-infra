@@ -28,8 +28,8 @@ sudo docker compose -f /opt/bmc/compose.yaml ps
 
 ## Build a new AMI version
 
-1. Change what is needed (`ami/database/…`, for example a new image digest in `files/compose.yaml`), through a PR.
-2. Build: `packer build -var version=<new> ami/database`.
+1. Change what is needed (`ansible/roles/…`, for example a new image digest in `ansible/roles/database/files/compose.yaml`), through a PR.
+2. Build (dev must be applied; prerequisites in README "Building the database image"): `packer init ami/database && packer build -var version=<new> ami/database`.
 3. **dev** picks the newest build on its next `terraform apply` (the instance is replaced, the data volume is kept).
 4. **prod**: change `database_ami_version` in `environments/prod/terraform.tfvars` in a PR, review the plan, apply.
 

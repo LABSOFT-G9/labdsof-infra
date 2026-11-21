@@ -10,7 +10,7 @@ name: CI
 #                            the environment and the action)
 #
 # lint   no AWS access: terraform fmt / validate / TFLint, packer fmt /
-#        validate, ShellCheck
+#        validate, ansible-lint, ShellCheck
 # plan   the plan is shown in the job summary and saved (a destroy plan when
 #        the action is destroy)
 # apply  button only, on main, in the GitHub environment of the same name
@@ -95,8 +95,14 @@ jobs:
           packer fmt -check -diff ami/database
           packer init ami/database
           packer validate -syntax-only -var version=0.0.0 ami/database
+      - name: Ansible lint
+        working-directory: ansible
+        run: |
+          pipx install ansible-lint==26.11.0
+          pipx inject ansible-lint ansible-core==2.21.6
+          ansible-lint
       - name: ShellCheck
-        run: shellcheck ami/database/scripts/*.sh ami/database/files/*.sh
+        run: shellcheck ansible/roles/database/files/*.sh
 
   plan:
     name: Plan ${{ matrix.env }}
