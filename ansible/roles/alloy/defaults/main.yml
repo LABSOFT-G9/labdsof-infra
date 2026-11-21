@@ -13,6 +13,9 @@ alloy_packages:
 
 # Container metrics (cAdvisor) where Docker runs.
 alloy_docker_metrics: true
-# Extra local endpoints to scrape: [{name: mysql, address: 127.0.0.1:9104}]
+# Extra local endpoints to scrape: [{name: app, address: 127.0.0.1:8080}]
 alloy_scrape_targets: []
+# MySQL metrics with Alloy's built-in exporter: path of a file holding the
+# connection string (written by the database host's bootstrap.sh). Unset: none.
+alloy_mysql_dsn_file: ""
 alloy_scrape_interval: 30s

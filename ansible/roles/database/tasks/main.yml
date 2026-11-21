@@ -1,5 +1,5 @@
 ---
-# MySQL 8.4 and mysqld_exporter (pinned by digest in files/compose.yaml), the
+# MySQL 8.4 (pinned by digest in files/compose.yaml), the
 # bootstrap and backup scripts and their systemd units. The units are enabled
 # at boot by the Terraform user data (modules/database), not here.
 
@@ -63,6 +63,6 @@
     - bmc-backup.timer
 
 # Pulled now, so a running host never needs Docker Hub.
-- name: Pull the pinned MySQL and exporter images
+- name: Pull the pinned MySQL image
   ansible.builtin.command: docker compose -f /opt/bmc/compose.yaml pull
   changed_when: true

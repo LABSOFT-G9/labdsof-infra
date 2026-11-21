@@ -1,6 +1,6 @@
 # Database host image: Ubuntu 24.04 LTS configured by Ansible
 # (ansible/database-image.yml: hardening, Docker, the MySQL and
-# mysqld_exporter images pinned by digest and already pulled, the bootstrap
+# image pinned by digest and already pulled, the bootstrap
 # and backup scripts, their systemd units). Configuration and secrets are not
 # baked in: Terraform user data and SSM Parameter Store provide them at boot.
 #

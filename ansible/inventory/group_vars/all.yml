@@ -10,5 +10,6 @@ ansible_ssh_common_args: >-
   -o IdentitiesOnly=yes
 
 bmc_environment: dev
+aws_region: eu-north-1
 # Fixed address of the monitoring host (environments/dev/main.tf).
 monitoring_ip: 10.10.1.20

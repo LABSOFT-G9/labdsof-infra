@@ -2,7 +2,7 @@
 # Started by bmc-database.service at every boot.
 # 1. mount the MySQL data volume (format it only if it is empty)
 # 2. read the database secrets from SSM Parameter Store into /run/bmc (tmpfs)
-# 3. start MySQL and mysqld_exporter
+# 3. start MySQL
 # 4. remove root@'%' and create or update the service databases and their
 #    users (every boot)
 # Configuration comes from /etc/bmc/database.env (Terraform user data).
@@ -14,7 +14,6 @@ source /etc/bmc/database.env
 
 MOUNT=/var/lib/bmc-mysql
 MYSQL_UID=999       # mysql user in the mysql image
-EXPORTER_UID=65534  # nobody, the user of the exporter image
 
 # --- 1. Data volume ---------------------------------------------------------
 # On Nitro instances the EBS volume appears as NVMe; its serial is the volume
@@ -73,13 +72,15 @@ chown -R "$MYSQL_UID" /run/bmc/initdb
 chmod 0500 /run/bmc/initdb
 chmod 0400 /run/bmc/initdb/01-users.sql
 
-cat > /run/bmc/exporter.my.cnf <<EOF
-[client]
-user=exporter
-password=$(value exporter_password)
-EOF
-chown "$EXPORTER_UID" /run/bmc/exporter.my.cnf
-chmod 0400 /run/bmc/exporter.my.cnf
+# Connection for the Alloy agent's MySQL metrics (prometheus.exporter.mysql):
+# readable by root and the alloy group only; no trailing newline.
+printf 'exporter:%s@(127.0.0.1:3306)/' "$(value exporter_password)" >/run/bmc/alloy-mysql.dsn
+if getent group alloy >/dev/null; then
+  chgrp alloy /run/bmc/alloy-mysql.dsn
+  chmod 0440 /run/bmc/alloy-mysql.dsn
+else
+  chmod 0400 /run/bmc/alloy-mysql.dsn
+fi
 
 # --- 3. Containers ----------------------------------------------------------
 docker compose -f /opt/bmc/compose.yaml up -d --wait

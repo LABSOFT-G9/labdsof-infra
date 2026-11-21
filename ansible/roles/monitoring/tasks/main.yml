@@ -27,7 +27,7 @@
 - name: Install Grafana's admin password
   ansible.builtin.copy:
     dest: "{{ monitoring_dir }}/grafana.env"
-    content: "GF_SECURITY_ADMIN_PASSWORD={{ lookup('amazon.aws.ssm_parameter', monitoring_grafana_password_parameter, region=ansible_aws_ssm_region) }}\n"
+    content: "GF_SECURITY_ADMIN_PASSWORD={{ lookup('amazon.aws.ssm_parameter', monitoring_grafana_password_parameter, region=aws_region) }}\n"
     owner: root
     group: root
     mode: "0600"

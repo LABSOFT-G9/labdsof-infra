@@ -1,5 +1,5 @@
 [Unit]
-Description=BMC database (data volume, secrets, MySQL and exporter)
+Description=BMC database (data volume, secrets, MySQL)
 Requires=docker.service
 After=docker.service network-online.target
 Wants=network-online.target

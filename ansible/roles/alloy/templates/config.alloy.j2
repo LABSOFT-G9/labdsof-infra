@@ -22,6 +22,25 @@ prometheus.scrape "docker" {
   forward_to      = [prometheus.remote_write.monitoring.receiver]
 }
 {% endif %}
+{% if alloy_mysql_dsn_file %}
+
+// MySQL metrics, Alloy's built-in exporter (no separate mysqld_exporter).
+local.file "mysql_dsn" {
+  filename  = "{{ alloy_mysql_dsn_file }}"
+  is_secret = true
+}
+
+prometheus.exporter.mysql "mysql" {
+  data_source_name = local.file.mysql_dsn.content
+}
+
+prometheus.scrape "mysql" {
+  targets         = prometheus.exporter.mysql.mysql.targets
+  job_name        = "mysql"
+  scrape_interval = "{{ alloy_scrape_interval }}"
+  forward_to      = [prometheus.remote_write.monitoring.receiver]
+}
+{% endif %}
 {% for target in alloy_scrape_targets %}
 
 prometheus.scrape "{{ target.name }}" {
