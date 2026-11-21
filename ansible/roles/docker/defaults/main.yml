@@ -1,0 +1,8 @@
+---
+# Amazon Linux 2023 packages Docker but not the Compose plugin: it comes from
+# the Compose release, pinned and checksum-verified (v5.7.0, 2026-11-02, from
+# the release's checksums.txt). Ubuntu uses its own docker-compose-v2 package.
+docker_compose_version: v5.7.0
+docker_compose_sha256:
+  x86_64: 7758048ad38e580f22559603312874fec8bb638d021a9e64182385fc17cc12a2
+  aarch64: 15861535d14e26555736b49376c95e14bfd94285366c8446bfac7156a972e76f

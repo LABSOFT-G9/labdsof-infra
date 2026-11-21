@@ -1,0 +1,42 @@
+# Managed by Ansible (ansible/roles/monitoring); local changes are overwritten.
+# Prometheus receives the metrics the agents push (remote write) on 9090; the
+# security group allows only the edge, application and database hosts.
+# Grafana listens on the host only: reach it with SSM port forwarding.
+name: bmc-monitoring
+
+services:
+  prometheus:
+    image: {{ monitoring_prometheus_image }}
+    container_name: bmc-prometheus
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time={{ monitoring_retention }}
+      - --web.enable-remote-write-receiver
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+
+  grafana:
+    image: {{ monitoring_grafana_image }}
+    container_name: bmc-grafana
+    restart: unless-stopped
+    env_file: grafana.env
+    environment:
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+
+volumes:
+  prometheus-data:
+  grafana-data:

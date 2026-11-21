@@ -1,0 +1,20 @@
+---
+# dev hosts, found by their EC2 tags (Terraform sets Project, Environment and
+# Role). Groups are named after the Role tag: edge, app, monitoring, database.
+plugin: amazon.aws.aws_ec2
+regions:
+  - eu-north-1
+filters:
+  tag:Project: bmc
+  tag:Environment: dev
+  instance-state-name: running
+hostnames:
+  - tag:Name
+keyed_groups:
+  - key: tags.Role
+    prefix: ""
+    separator: ""
+compose:
+  # The SSM connection reaches a host by its instance ID; there is no SSH.
+  ansible_host: instance_id
+  ansible_aws_ssm_instance_id: instance_id

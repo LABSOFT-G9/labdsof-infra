@@ -1,0 +1,54 @@
+---
+# Grafana Alloy: the metrics agent on every host.
+
+- name: Set the package format
+  ansible.builtin.set_fact:
+    alloy_package: "{{ alloy_packages['deb' if ansible_facts['os_family'] == 'Debian' else 'rpm'] }}"
+
+- name: Download Alloy, checksum-verified
+  ansible.builtin.get_url:
+    url: "https://github.com/grafana/alloy/releases/download/v{{ alloy_version }}/{{ alloy_package.file }}"
+    dest: "/var/tmp/{{ alloy_package.file }}"
+    checksum: "sha256:{{ alloy_package.sha256 }}"
+    mode: "0644"
+
+- name: Install Alloy (Ubuntu)
+  ansible.builtin.apt:
+    deb: "/var/tmp/{{ alloy_package.file }}"
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Install Alloy (Amazon Linux)
+  ansible.builtin.dnf:
+    name: "/var/tmp/{{ alloy_package.file }}"
+    # The file's checksum was verified against the release's SHA256SUMS.
+    disable_gpg_check: true
+    state: present
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Let Alloy read Docker's container metrics
+  ansible.builtin.user:
+    name: alloy
+    groups: docker
+    append: true
+  when: alloy_docker_metrics
+  notify: Restart Alloy
+
+- name: Install the Alloy configuration
+  ansible.builtin.template:
+    src: config.alloy.j2
+    dest: /etc/alloy/config.alloy
+    owner: root
+    group: alloy
+    mode: "0640"
+  notify: Restart Alloy
+
+- name: Start Alloy now and at every boot
+  ansible.builtin.systemd_service:
+    name: alloy
+    enabled: true
+    state: started
+
+- name: Remove the downloaded package
+  ansible.builtin.file:
+    path: "/var/tmp/{{ alloy_package.file }}"
+    state: absent

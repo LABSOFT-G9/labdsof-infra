@@ -15,7 +15,7 @@ modules/                 internal modules, no environment-specific values
   network/               VPC, public + private subnet, S3 gateway endpoint, optional SSM endpoints, locked default security group
   edge/                  the only public host: NAT for the private subnet, forwards 80/443 to the application host
   app/                   application host: plain EC2 in the private subnet, security group, IAM role
-  monitoring/            monitoring host: plain EC2 in the private subnet; accepts pushed metrics (9090) and logs (3100)
+  monitoring/            monitoring host: EC2 in the private subnet for Prometheus and Grafana; accepts pushed metrics (9090)
   storage/               S3 buckets: attachments and backups (private, encrypted, versioned, lifecycle)
   database/              EC2 database host from the AMI, encrypted data volume, IAM role, security group
 environments/
@@ -23,7 +23,7 @@ environments/
   prod/                  the same modules with prod values
 bootstrap/               one-time: the S3 bucket for Terraform state, the CI user and the bmc-admin role
 ami/database/            Packer template: builds the database image in dev's private subnet, configured by Ansible
-ansible/                 Ansible: database-image.yml and the roles base, docker, database (compose.yaml, scripts, systemd units)
+ansible/                 Ansible: database-image.yml (image build), site.yml (running hosts over Session Manager); roles base, docker, database, app, monitoring, alloy
 docs/runbooks/           operating procedures
 ```
 
@@ -66,12 +66,35 @@ S3 gateway endpoint on both route tables (free)
 
 - Web traffic: internet -> edge host :80/443 -> application host. The client's address is kept. Nothing answers yet: the application host has no software.
 - The private hosts reach the internet only outbound, through the edge host's NAT; nothing on the internet can open a connection to them.
-- Monitoring is push-based: the edge, application and database hosts may send metrics (9090) and logs (3100) to the monitoring host, and nothing else reaches it. Grafana will be reached through Session Manager port forwarding, not exposed.
+- Monitoring is push-based: an agent (Grafana Alloy) on every host sends metrics to Prometheus on the monitoring host (9090), and nothing else reaches it. Grafana listens on the monitoring host only and is reached through Session Manager port forwarding, not exposed.
 - The edge host runs only the NAT and forwarding rules (nftables, `modules/edge/user-data.sh.tftpl`); no application code, no secrets.
 - Edge, application and monitoring hosts: Amazon Linux 2023 (x86_64, image pinned in `terraform.tfvars`), IMDSv2 only, encrypted disks, administered through SSM Session Manager; no SSH port.
 - The VPC's default security group has no rules, so anything launched without a security group has no network access.
 - The account is on the AWS Free plan: only free-tier eligible instance types launch (eu-north-1: `t3.micro`, `t3.small`, `c7i-flex.large`, `m7i-flex.large`, `t4g.micro`, `t4g.small`); any other type fails at apply with `InvalidParameterCombination`.
 - The account's default VPC in eu-north-1 (`172.31.0.0/16`, public subnets that hand out public IPs) was deleted on 2026-11-21, outside Terraform, so nothing can be launched there by accident. `aws ec2 create-default-vpc` recreates it if ever needed.
+
+## Configuring the hosts (Ansible)
+
+`ansible/site.yml` configures the running hosts of dev over SSM Session Manager (no SSH): Docker and Compose on the application and monitoring hosts, `/opt/bmc-app` for the application's Compose file, Prometheus and Grafana on the monitoring host, and the Alloy agent on every host (host metrics, container metrics where Docker runs, MySQL metrics on the database host). Hosts are found by their `Role` tag; files travel through the `bmc-dev-ansible-<account>` bucket with presigned URLs.
+
+Needs, where you run it: AWS credentials, `ansible-core` 2.21 with `boto3` and `botocore`, the Session Manager plugin, and the collections:
+
+```
+cd ansible
+ansible-galaxy collection install -r requirements.yml
+ansible-inventory -i inventory/dev.aws_ec2.yml --graph     # edge, app, monitoring, database
+ansible-playbook  -i inventory/dev.aws_ec2.yml site.yml
+```
+
+### Grafana
+
+```
+aws ssm start-session --target <monitoring instance id> \
+  --document-name AWS-StartPortForwardingSession \
+  --parameters portNumber=3000,localPortNumber=3000
+```
+
+Then open <http://localhost:3000>, user `admin`, password in Parameter Store `/bmc/dev/monitoring/grafana_admin_password` (`aws ssm get-parameter --with-decryption …`, on your own machine). Prometheus is already its data source; metrics carry the labels `host`, `role` and `environment`. Prometheus keeps 7 days.
 
 ## Lifecycle: create, test, destroy
 

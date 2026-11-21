@@ -1,0 +1,44 @@
+// Managed by Ansible (ansible/roles/alloy); local changes are overwritten.
+// Collects this host's metrics and pushes them to Prometheus on the
+// monitoring host ({{ monitoring_ip }}:9090, remote write).
+
+prometheus.exporter.unix "host" { }
+
+prometheus.scrape "host" {
+  targets         = prometheus.exporter.unix.host.targets
+  scrape_interval = "{{ alloy_scrape_interval }}"
+  forward_to      = [prometheus.remote_write.monitoring.receiver]
+}
+{% if alloy_docker_metrics %}
+
+prometheus.exporter.cadvisor "docker" {
+  docker_host      = "unix:///var/run/docker.sock"
+  storage_duration = "5m"
+}
+
+prometheus.scrape "docker" {
+  targets         = prometheus.exporter.cadvisor.docker.targets
+  scrape_interval = "{{ alloy_scrape_interval }}"
+  forward_to      = [prometheus.remote_write.monitoring.receiver]
+}
+{% endif %}
+{% for target in alloy_scrape_targets %}
+
+prometheus.scrape "{{ target.name }}" {
+  targets         = [{"__address__" = "{{ target.address }}"}]
+  job_name        = "{{ target.name }}"
+  scrape_interval = "{{ alloy_scrape_interval }}"
+  forward_to      = [prometheus.remote_write.monitoring.receiver]
+}
+{% endfor %}
+
+prometheus.remote_write "monitoring" {
+  endpoint {
+    url = "http://{{ monitoring_ip }}:9090/api/v1/write"
+  }
+  external_labels = {
+    host        = "{{ inventory_hostname }}",
+    role        = "{{ group_names | difference(['all']) | first | default('unknown') }}",
+    environment = "{{ bmc_environment }}",
+  }
+}

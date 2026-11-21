@@ -1,0 +1,5 @@
+---
+# mysqld_exporter runs on the database host (published on port 9104).
+alloy_scrape_targets:
+  - name: mysql
+    address: 127.0.0.1:9104
