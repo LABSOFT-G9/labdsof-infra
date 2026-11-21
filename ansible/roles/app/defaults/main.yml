@@ -1,0 +1,11 @@
+---
+# Database host (fixed address, environments/<env>/main.tf) and the service
+# databases, as in terraform.tfvars `databases`; each password is
+# /bmc/<env>/database/users/<name> and reaches the containers as
+# <NAME>_DB_PASSWORD.
+app_database_host: 10.10.1.30
+app_databases:
+  - issue
+  - dispatch
+  - notification
+  - keycloak

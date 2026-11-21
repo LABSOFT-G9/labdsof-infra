@@ -1,12 +1,41 @@
 ---
-# Application host: Docker and Compose (docker role) and the directory the
-# application's compose.yaml is deployed to (by the application repository's
-# deploy job). The application itself is not installed here.
+# Application host: Docker and Compose (docker role), the directory the
+# application repository's deploy job copies its compose.yaml to, and the
+# script that job runs (bmc-app-deploy <image tag>, over SSM Run Command).
+
+- name: Install jq (the deploy script reads Parameter Store's JSON)
+  ansible.builtin.dnf:
+    name: jq
+    state: present
 
 - name: Create the application directory
   ansible.builtin.file:
     path: /opt/bmc-app
     state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Create /etc/bmc
+  ansible.builtin.file:
+    path: /etc/bmc
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the deploy configuration
+  ansible.builtin.template:
+    src: app.env.j2
+    dest: /etc/bmc/app.env
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the deploy script
+  ansible.builtin.copy:
+    src: bmc-app-deploy
+    dest: /usr/local/bin/bmc-app-deploy
     owner: root
     group: root
     mode: "0755"
