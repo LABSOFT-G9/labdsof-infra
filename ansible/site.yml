@@ -10,6 +10,12 @@
   roles:
     - docker
 
+- name: Docker log rotation wherever Docker runs
+  hosts: app:monitoring:database
+  become: true
+  roles:
+    - docker_logs
+
 - name: Application host
   hosts: app
   become: true

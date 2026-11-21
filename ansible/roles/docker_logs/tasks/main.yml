@@ -1,0 +1,20 @@
+---
+# Docker log rotation. Applies to containers created after it; existing ones
+# keep their settings until they are recreated (next deploy, image change).
+
+- name: Create /etc/docker
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Rotate containers' logs
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ {'log-driver': 'json-file', 'log-opts': {'max-size': docker_logs_max_size, 'max-file': docker_logs_max_files}} | to_nice_json }}\n"
+  notify: Restart Docker

@@ -11,8 +11,13 @@ alloy_packages:
     file: alloy-1.21.3-1.amd64.rpm
     sha256: 6c22d473950c5fdfb4b0b5df3a9d06107eb1022324ebcbd358c2d08c5981881c
 
-# Container metrics (cAdvisor) where Docker runs.
+# Container metrics (cAdvisor) and container logs where Docker runs.
 alloy_docker_metrics: true
+# Logs to Loki on the monitoring host: the system journal everywhere, the
+# containers' logs where Docker runs (alloy_docker_metrics).
+alloy_logs: true
+# On the first start, read at most this much of the journal's past.
+alloy_journal_max_age: 12h
 # Extra local endpoints to scrape: [{name: app, address: 127.0.0.1:8080}]
 alloy_scrape_targets: []
 # MySQL metrics with Alloy's built-in exporter: path of a file holding the

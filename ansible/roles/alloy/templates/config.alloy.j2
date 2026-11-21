@@ -1,6 +1,7 @@
 // Managed by Ansible (ansible/roles/alloy); local changes are overwritten.
 // Collects this host's metrics and pushes them to Prometheus on the
-// monitoring host ({{ monitoring_ip }}:9090, remote write).
+// monitoring host ({{ monitoring_ip }}:9090, remote write){% if alloy_logs %}, and its logs to
+// Loki there ({{ monitoring_ip }}:3100){% endif %}.
 
 prometheus.exporter.unix "host" { }
 
@@ -51,6 +52,66 @@ prometheus.scrape "{{ target.name }}" {
 }
 {% endfor %}
 
+{% if alloy_logs %}
+// --- Logs ------------------------------------------------------------------
+
+// System journal: services, boot, sudo, SSM, the deploy and bootstrap scripts.
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+loki.source.journal "system" {
+  max_age       = "{{ alloy_journal_max_age }}"
+  relabel_rules = loki.relabel.journal.rules
+  labels        = { job = "journal" }
+  forward_to    = [loki.write.monitoring.receiver]
+}
+{% if alloy_docker_metrics %}
+
+// Containers' logs (stdout and stderr), labelled by container name.
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+}
+
+discovery.relabel "containers" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.containers.output
+  labels     = { job = "docker" }
+  forward_to = [loki.write.monitoring.receiver]
+}
+{% endif %}
+
+loki.write "monitoring" {
+  endpoint {
+    url = "http://{{ monitoring_ip }}:3100/loki/api/v1/push"
+  }
+  external_labels = {
+    host        = "{{ inventory_hostname }}",
+    role        = "{{ group_names | difference(['all']) | first | default('unknown') }}",
+    environment = "{{ bmc_environment }}",
+  }
+}
+
+{% endif %}
 prometheus.remote_write "monitoring" {
   endpoint {
     url = "http://{{ monitoring_ip }}:9090/api/v1/write"

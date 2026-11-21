@@ -67,8 +67,8 @@ module "app" {
   permissions_boundary          = local.workload_boundary_arn
 }
 
-# Prometheus and Grafana (ansible/roles/monitoring). The edge,
-# application and database hosts push metrics to it.
+# Prometheus, Loki and Grafana (ansible/roles/monitoring). The edge,
+# application and database hosts push metrics and logs to it.
 module "monitoring" {
   source = "../../modules/monitoring"
   count  = var.monitoring_enabled ? 1 : 0

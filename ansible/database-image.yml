@@ -9,6 +9,7 @@
   roles:
     - base
     - docker
+    - docker_logs
     - database
 
   post_tasks:

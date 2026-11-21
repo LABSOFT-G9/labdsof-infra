@@ -1,0 +1,6 @@
+---
+# Each container keeps at most docker_logs_max_files files of docker_logs_max_size
+# of its own log on the host (Docker's default keeps everything). The logs also
+# go to Loki (alloy role), where they are kept 7 days.
+docker_logs_max_size: 10m
+docker_logs_max_files: "3"

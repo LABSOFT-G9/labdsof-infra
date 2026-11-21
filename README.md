@@ -15,7 +15,7 @@ modules/                 internal modules, no environment-specific values
   network/               VPC, public + private subnet, S3 gateway endpoint, optional SSM endpoints, locked default security group
   edge/                  the only public host: NAT for the private subnet, forwards 80/443 to the application host
   app/                   application host: plain EC2 in the private subnet, security group, IAM role
-  monitoring/            monitoring host: EC2 in the private subnet for Prometheus and Grafana; accepts pushed metrics (9090)
+  monitoring/            monitoring host: EC2 in the private subnet for Prometheus, Loki and Grafana; accepts pushed metrics (9090) and logs (3100)
   storage/               S3 buckets: attachments and backups (private, encrypted, versioned, lifecycle)
   database/              EC2 database host from the AMI, encrypted data volume, IAM role, security group
 environments/
@@ -23,7 +23,7 @@ environments/
   prod/                  the same modules with prod values
 bootstrap/               one-time: the S3 bucket for Terraform state, the CI user and the bmc-admin role
 ami/database/            Packer template: builds the database image in dev's private subnet, configured by Ansible
-ansible/                 Ansible: database-image.yml (image build), site.yml (running hosts over Session Manager); roles base, docker, database, app, monitoring, alloy
+ansible/                 Ansible: database-image.yml (image build), site.yml (running hosts over Session Manager); roles base, docker, docker_logs, database, app, monitoring, alloy
 docs/runbooks/           operating procedures
 ```
 
@@ -56,17 +56,17 @@ dev VPC 10.10.0.0/16, one availability zone (eu-north-1a)
 │    └─ Edge host  t3.micro, public IP (changes on stop/start). NAT for the private subnet;
 │                  forwards TCP 80/443 to the application host
 └─ Private subnet 10.10.1.0/24  route 0.0.0.0/0 -> edge host
-     ├─ Application host  m7i-flex.large (8 GiB), 10.10.1.10, no public IP; plain server,
-     │                    nothing installed yet
-     ├─ Monitoring host   t3.small, 10.10.1.20, no public IP; plain server,
-     │                    nothing installed yet (Prometheus, Loki, Grafana later)
-     └─ Database host     t3.small, 10.10.1.30, from bmc-database-1.1.0
+     ├─ Application host  m7i-flex.large (8 GiB), 10.10.1.10, no public IP; Docker,
+     │                    the application's compose.yaml (deployed by its pipeline)
+     ├─ Monitoring host   t3.small, 10.10.1.20, no public IP; Prometheus, Loki, Grafana
+     └─ Database host     t3.small, 10.10.1.30, from bmc-database-1.2.0; MySQL 8.4
+Every host: the Alloy agent (metrics and logs to the monitoring host).
 S3 gateway endpoint on both route tables (free)
 ```
 
 - Web traffic: internet -> edge host :80/443 -> application host. The client's address is kept. Nothing answers yet: the application host has no software.
 - The private hosts reach the internet only outbound, through the edge host's NAT; nothing on the internet can open a connection to them.
-- Monitoring is push-based: an agent (Grafana Alloy) on every host sends metrics to Prometheus on the monitoring host (9090), and nothing else reaches it. Grafana listens on the monitoring host only and is reached through Session Manager port forwarding, not exposed.
+- Monitoring is push-based: an agent (Grafana Alloy) on every host sends metrics to Prometheus (9090) and logs to Loki (3100) on the monitoring host, and nothing else reaches it. Grafana listens on the monitoring host only and is reached through Session Manager port forwarding, not exposed.
 - The edge host runs only the NAT and forwarding rules (nftables, `modules/edge/user-data.sh.tftpl`); no application code, no secrets.
 - Edge, application and monitoring hosts: Amazon Linux 2023 (x86_64, image pinned in `terraform.tfvars`), IMDSv2 only, encrypted disks, administered through SSM Session Manager; no SSH port.
 - The VPC's default security group has no rules, so anything launched without a security group has no network access.
@@ -104,7 +104,9 @@ aws ssm start-session --target <monitoring instance id> \
   --parameters portNumber=3000,localPortNumber=3000
 ```
 
-Then open <http://localhost:3000>, user `admin`, password in Parameter Store `/bmc/dev/monitoring/grafana_admin_password` (`aws ssm get-parameter --with-decryption …`, on your own machine). Prometheus is already its data source; metrics carry the labels `host`, `role` and `environment`. Prometheus keeps 7 days.
+Then open <http://localhost:3000>, user `admin`, password in Parameter Store `/bmc/dev/monitoring/grafana_admin_password` (`aws ssm get-parameter --with-decryption …`, on your own machine). Prometheus (metrics) and Loki (logs) are already its data sources; metrics carry the labels `host`, `role` and `environment`. Both keep 7 days.
+
+Logs in Explore → Loki, for example `{host="bmc-dev-app", container="bmc-issue-1"}`, `{role="database"} |= "error"`, `{unit="bmc-database.service"}`. Labels: `host`, `role`, `environment`, `job` (`journal` or `docker`), `unit` (systemd unit), `container`. On the hosts themselves Docker keeps at most 3 × 10 MB of log per container (`docker_logs` role); the system journal keeps its default size.
 
 ## Application deploy
 

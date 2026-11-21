@@ -1,5 +1,5 @@
 output "private_ip" {
-  description = "Where the other hosts push metrics (9090)."
+  description = "Where the other hosts push metrics (9090) and logs (3100)."
   value       = aws_instance.monitoring.private_ip
 }
 
