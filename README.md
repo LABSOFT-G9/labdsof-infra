@@ -36,7 +36,7 @@ Each environment has its own state file (`<env>/terraform.tfstate` in the state 
 | VPC | `10.10.0.0/16` | `10.20.0.0/16` |
 | Database host | on (`database_enabled = true`), image `bmc-database-1.0.0` | off for now |
 | Database AMI | newest build (`"*"`) | pinned version (`1.0.0`), changed only by a PR |
-| Database instance | `t3.micro` | `t3.small` |
+| Database instance | `t3.small` (2 GiB: MySQL, exporter and the Alloy agent do not fit in 1 GiB) | `t3.small` |
 | Data volume | 10 GiB | 10 GiB |
 | Database subnet | private subnet, outbound through the edge host (fixed IP `10.10.1.30`) | not set up yet (dev first) |
 | Backup retention | 7 days | 30 days |
@@ -60,7 +60,7 @@ dev VPC 10.10.0.0/16, one availability zone (eu-north-1a)
      │                    nothing installed yet
      ├─ Monitoring host   t3.small, 10.10.1.20, no public IP; plain server,
      │                    nothing installed yet (Prometheus, Loki, Grafana later)
-     └─ Database host     t3.micro, 10.10.1.30, from bmc-database-1.0.0
+     └─ Database host     t3.small, 10.10.1.30, from bmc-database-1.1.0
 S3 gateway endpoint on both route tables (free)
 ```
 
