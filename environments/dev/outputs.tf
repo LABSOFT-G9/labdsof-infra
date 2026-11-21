@@ -25,7 +25,7 @@ output "backups_bucket" {
 }
 
 output "edge_public_ip" {
-  description = "Fixed public address of the edge host: point DNS here."
+  description = "Current public address of the edge host; it changes on stop/start."
   value       = module.edge.public_ip
 }
 

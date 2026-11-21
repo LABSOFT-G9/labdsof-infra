@@ -149,7 +149,9 @@ resource "aws_instance" "edge" {
   ami           = data.aws_ami.edge.id
   instance_type = var.instance_type
   subnet_id     = var.subnet_id
-  # Needed during the first boot (packages) until the Elastic IP is attached.
+  # Its public address: assigned by AWS, it changes when the host is stopped
+  # and started, and is not billed while stopped (an Elastic IP would be).
+  # Use an Elastic IP once a DNS name must point here.
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.edge.id]
   iam_instance_profile        = aws_iam_instance_profile.edge.name
@@ -191,14 +193,6 @@ resource "aws_instance" "edge" {
       error_message = "The image's architecture does not match the instance type (for example an arm64 image on an x86_64 type)."
     }
   }
-
-  tags = { Name = "${var.name}-edge" }
-}
-
-# Fixed public address: survives stop/start, so DNS can point at it.
-resource "aws_eip" "edge" {
-  domain   = "vpc"
-  instance = aws_instance.edge.id
 
   tags = { Name = "${var.name}-edge" }
 }
