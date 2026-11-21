@@ -4,7 +4,7 @@ variable "name" {
 }
 
 variable "region" {
-  description = "AWS region, used for the endpoint service names."
+  description = "AWS region, used for the S3 endpoint's service name."
   type        = string
 }
 
@@ -17,10 +17,4 @@ variable "availability_zone" {
   description = "Availability zone for both subnets. Null picks the first available one."
   type        = string
   default     = null
-}
-
-variable "enable_ssm_endpoints" {
-  description = "Create the SSM interface endpoints (billed per hour) so a private-subnet host can use Session Manager and Parameter Store."
-  type        = bool
-  default     = false
 }

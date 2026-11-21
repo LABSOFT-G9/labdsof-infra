@@ -6,12 +6,22 @@ variable "region" {
   type = string
 }
 
+variable "availability_zone" {
+  description = "The one availability zone everything runs in, for example eu-north-1a."
+  type        = string
+}
+
 variable "vpc_cidr" {
   type = string
 }
 
 variable "edge_instance_type" {
-  description = "Edge host (NAT and web forwarding); arm64, for example t4g.nano."
+  description = "Edge host (NAT and web forwarding), for example t3.nano."
+  type        = string
+}
+
+variable "edge_ami_id" {
+  description = "Pinned image of the edge host; must match edge_instance_type's architecture."
   type        = string
 }
 
@@ -25,8 +35,8 @@ variable "app_instance_type" {
   type        = string
 }
 
-variable "app_architecture" {
-  description = "arm64 or x86_64; must match app_instance_type."
+variable "app_ami_id" {
+  description = "Pinned image of the application host; must match app_instance_type's architecture."
   type        = string
 }
 
@@ -40,8 +50,8 @@ variable "monitoring_instance_type" {
   type        = string
 }
 
-variable "monitoring_architecture" {
-  description = "arm64 or x86_64; must match monitoring_instance_type."
+variable "monitoring_ami_id" {
+  description = "Pinned image of the monitoring host; must match monitoring_instance_type's architecture."
   type        = string
 }
 

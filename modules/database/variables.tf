@@ -19,8 +19,25 @@ variable "ami_version" {
 }
 
 variable "instance_type" {
-  description = "EC2 instance type."
+  description = "EC2 instance type; x86_64, like the bmc-database AMI (for example t3.micro)."
   type        = string
+}
+
+variable "cpu_credits" {
+  description = "Credit mode for burstable types (t3, t4g): standard (slows down when credits run out) or unlimited (bills the extra). Ignored for other types."
+  type        = string
+  default     = "standard"
+
+  validation {
+    condition     = contains(["standard", "unlimited"], var.cpu_credits)
+    error_message = "cpu_credits must be standard or unlimited."
+  }
+}
+
+variable "root_volume_size" {
+  description = "Root volume in GiB: OS, Docker, the MySQL and exporter images, logs. MySQL data is on the data volume."
+  type        = number
+  default     = 12
 }
 
 variable "vpc_id" {
@@ -28,20 +45,10 @@ variable "vpc_id" {
 }
 
 variable "subnet_id" {
-  description = "Subnet for the host."
+  description = "Private subnet for the host; the data volume is created in its zone."
   type        = string
 }
 
-variable "availability_zone" {
-  description = "Must be the subnet's availability zone, because the data volume is attached there."
-  type        = string
-}
-
-variable "public_ip" {
-  description = "Give the host a public IP for outbound traffic. Needed in a public subnet without VPC endpoints; inbound access is still limited by the security group."
-  type        = bool
-  default     = false
-}
 
 variable "data_volume_size" {
   description = "Size of the MySQL data volume in GiB."
@@ -57,12 +64,6 @@ variable "deletion_protection" {
 variable "client_security_group_ids" {
   description = "Security groups allowed to connect to MySQL (3306), for example the application host."
   type        = list(string)
-}
-
-variable "monitoring_security_group_ids" {
-  description = "Security groups allowed to scrape mysqld_exporter (9104)."
-  type        = list(string)
-  default     = []
 }
 
 variable "backups_bucket" {
@@ -88,6 +89,12 @@ variable "backup_schedule" {
 
 variable "monitoring_ip" {
   description = "Private IP of the monitoring host, to allow pushing metrics (9090) and logs (3100) to it. Null: no monitoring host."
+  type        = string
+  default     = null
+}
+
+variable "private_ip" {
+  description = "Fixed private address in the subnet, so the application host's firewall can point at it. Null: AWS picks one."
   type        = string
   default     = null
 }

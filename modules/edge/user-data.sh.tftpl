@@ -9,6 +9,10 @@ for attempt in 1 2 3 4 5; do
   dnf install -y nftables && break
   sleep $((attempt * 10))
 done
+if ! rpm -q nftables >/dev/null; then
+  echo "bmc-edge: nftables is not installed; no NAT and no forwarding" >&2
+  exit 1
+fi
 
 cat >/etc/sysctl.d/90-bmc-edge.conf <<'EOF'
 net.ipv4.ip_forward = 1

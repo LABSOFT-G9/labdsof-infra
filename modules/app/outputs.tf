@@ -9,6 +9,6 @@ output "instance_id" {
 }
 
 output "security_group_id" {
-  description = "Allowed to reach MySQL on the database host."
+  description = "The application host's security group: the database and monitoring hosts allow it."
   value       = aws_security_group.app.id
 }

@@ -4,21 +4,39 @@
 # web traffic reaches it only through the edge host's forwarding
 # (modules/edge), and it reaches the internet through the edge host's NAT.
 
-# Newest Amazon Linux 2023 when the host is created. A newer image does not
-# replace a running host (ignore_changes below); replace it on purpose with
-# `terraform apply -replace=module.app[0].aws_instance.app`.
-data "aws_ssm_parameter" "al2023" {
-  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-${var.architecture}"
+# The image is pinned (ami_id): changing it is a reviewed change that
+# replaces the host. The instance type decides the CPU architecture; the
+# check on aws_instance.app stops a plan whose image does not match it.
+data "aws_ec2_instance_type" "app" {
+  instance_type = var.instance_type
+}
+
+# Only Amazon's images are accepted. include_deprecated: the pin keeps
+# resolving after AWS deprecates the image (about three months after release).
+data "aws_ami" "app" {
+  owners             = ["amazon"]
+  include_deprecated = true
+
+  filter {
+    name   = "image-id"
+    values = [var.ami_id]
+  }
 }
 
 # --- Network access ---------------------------------------------------------
 
+# name_prefix and create_before_destroy: a replacement group is created next
+# to the old one (a group in use cannot be deleted first).
 resource "aws_security_group" "app" {
-  name        = "${var.name}-app"
+  name_prefix = "${var.name}-app-"
   description = "Application host"
   vpc_id      = var.vpc_id
 
   tags = { Name = "${var.name}-app" }
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 # Web traffic arrives only through the edge host's forwarding, which keeps the
@@ -36,7 +54,7 @@ resource "aws_vpc_security_group_ingress_rule" "web" {
 }
 
 # Outbound: the internet over HTTP/HTTPS through the edge host's NAT
-# (packages, SSM) and MySQL inside the VPC.
+# (packages, images, SSM; S3 goes through the gateway endpoint).
 resource "aws_vpc_security_group_egress_rule" "web" {
   for_each = toset(["80", "443"])
 
@@ -48,13 +66,16 @@ resource "aws_vpc_security_group_egress_rule" "web" {
   cidr_ipv4         = "0.0.0.0/0"
 }
 
+# MySQL to the database host only, when there is one.
 resource "aws_vpc_security_group_egress_rule" "mysql" {
+  count = var.database_ip == null ? 0 : 1
+
   security_group_id = aws_security_group.app.id
   description       = "MySQL to the database host"
   ip_protocol       = "tcp"
   from_port         = 3306
   to_port           = 3306
-  cidr_ipv4         = var.vpc_cidr
+  cidr_ipv4         = "${var.database_ip}/32"
 }
 
 # Push metrics (9090) and logs (3100) to the monitoring host, when there is one.
@@ -82,27 +103,91 @@ data "aws_iam_policy_document" "assume" {
 }
 
 resource "aws_iam_role" "app" {
-  name                 = "${var.name}-app"
+  name_prefix          = "${var.name}-app-"
   assume_role_policy   = data.aws_iam_policy_document.assume.json
   permissions_boundary = var.permissions_boundary
 }
 
-# Session Manager access instead of SSH. Application permissions (buckets,
-# parameters) are added when the deployment is defined.
-resource "aws_iam_role_policy_attachment" "ssm_core" {
-  role       = aws_iam_role.app.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+# Session Manager (and Run Command) only, instead of SSH. Not AWS's
+# AmazonSSMManagedInstanceCore: that policy also allows reading every
+# Parameter Store parameter (ssm:GetParameter on *), including other hosts'
+# secrets.
+data "aws_iam_policy_document" "session_manager" {
+  statement {
+    sid       = "RegisterWithSsm"
+    actions   = ["ssm:UpdateInstanceInformation"]
+    resources = ["*"]
+  }
+  statement {
+    sid = "SessionChannels"
+    actions = [
+      "ssmmessages:CreateControlChannel",
+      "ssmmessages:CreateDataChannel",
+      "ssmmessages:OpenControlChannel",
+      "ssmmessages:OpenDataChannel",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    sid = "RunCommandMessages"
+    actions = [
+      "ec2messages:AcknowledgeMessage",
+      "ec2messages:DeleteMessage",
+      "ec2messages:FailMessage",
+      "ec2messages:GetEndpoint",
+      "ec2messages:GetMessages",
+      "ec2messages:SendReply",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "session_manager" {
+  name   = "session-manager"
+  role   = aws_iam_role.app.id
+  policy = data.aws_iam_policy_document.session_manager.json
+}
+
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
+# What the application itself may use:
+#   - its own Parameter Store path (parameter_prefix), nothing else;
+#   - its attachments bucket (for example photos): list, read and write.
+#     Deleting is not allowed (the workload boundary does not allow it).
+data "aws_iam_policy_document" "app" {
+  statement {
+    sid       = "ReadOwnParameters"
+    actions   = ["ssm:GetParameter", "ssm:GetParameters"]
+    resources = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${var.parameter_prefix}/*"]
+  }
+  statement {
+    sid       = "ListAttachments"
+    actions   = ["s3:ListBucket"]
+    resources = [var.attachments_bucket_arn]
+  }
+  statement {
+    sid       = "ReadWriteAttachments"
+    actions   = ["s3:GetObject", "s3:PutObject"]
+    resources = ["${var.attachments_bucket_arn}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "app" {
+  name   = "app"
+  role   = aws_iam_role.app.id
+  policy = data.aws_iam_policy_document.app.json
 }
 
 resource "aws_iam_instance_profile" "app" {
-  name = "${var.name}-app"
-  role = aws_iam_role.app.name
+  name_prefix = "${var.name}-app-"
+  role        = aws_iam_role.app.name
 }
 
 # --- Host -----------------------------------------------------------------------
 
 resource "aws_instance" "app" {
-  ami                         = data.aws_ssm_parameter.al2023.value
+  ami                         = data.aws_ami.app.id
   instance_type               = var.instance_type
   subnet_id                   = var.subnet_id
   private_ip                  = var.private_ip
@@ -111,12 +196,21 @@ resource "aws_instance" "app" {
   iam_instance_profile        = aws_iam_instance_profile.app.name
   disable_api_termination     = var.deletion_protection
 
-  # IMDSv2 only; hop limit 1 keeps containers from reading the host's
-  # credentials through the metadata service.
+  # IMDSv2 only. Hop limit 2 lets containers use the host's role (S3
+  # attachments); everything the role allows is then open to every container.
   metadata_options {
     http_tokens                 = "required"
     http_endpoint               = "enabled"
-    http_put_response_hop_limit = 1
+    http_put_response_hop_limit = 2
+  }
+
+  # Burstable types only (t3, t4g): "standard" slows the CPU down when its
+  # credits run out instead of billing the extra ("unlimited").
+  dynamic "credit_specification" {
+    for_each = data.aws_ec2_instance_type.app.burstable_performance_supported ? [var.cpu_credits] : []
+    content {
+      cpu_credits = credit_specification.value
+    }
   }
 
   root_block_device {
@@ -126,7 +220,10 @@ resource "aws_instance" "app" {
   }
 
   lifecycle {
-    ignore_changes = [ami]
+    precondition {
+      condition     = contains(data.aws_ec2_instance_type.app.supported_architectures, data.aws_ami.app.architecture)
+      error_message = "The image's architecture does not match the instance type (for example an arm64 image on an x86_64 type)."
+    }
   }
 
   tags = { Name = "${var.name}-app" }

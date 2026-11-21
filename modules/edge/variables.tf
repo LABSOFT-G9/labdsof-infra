@@ -4,8 +4,29 @@ variable "name" {
 }
 
 variable "instance_type" {
-  description = "EC2 instance type; arm64 (Graviton), for example t4g.nano."
+  description = "EC2 instance type; it decides the CPU architecture (t4g/m7g are arm64, t3/m7i are x86_64)."
   type        = string
+}
+
+variable "ami_id" {
+  description = "Pinned image (AMI ID, region-specific). Its architecture must match instance_type; changing it replaces the host."
+  type        = string
+
+  validation {
+    condition     = can(regex("^ami-[0-9a-f]{8,17}$", var.ami_id))
+    error_message = "ami_id must look like ami-0123456789abcdef0."
+  }
+}
+
+variable "cpu_credits" {
+  description = "Credit mode for burstable types (t3, t4g): standard (slows down when credits run out) or unlimited (bills the extra). Ignored for other types."
+  type        = string
+  default     = "standard"
+
+  validation {
+    condition     = contains(["standard", "unlimited"], var.cpu_credits)
+    error_message = "cpu_credits must be standard or unlimited."
+  }
 }
 
 variable "vpc_id" {

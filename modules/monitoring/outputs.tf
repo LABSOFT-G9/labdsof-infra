@@ -9,5 +9,6 @@ output "instance_id" {
 }
 
 output "security_group_id" {
-  value = aws_security_group.monitoring.id
+  description = "The monitoring host's security group."
+  value       = aws_security_group.monitoring.id
 }

@@ -15,15 +15,17 @@ locals {
   # hosts exist, so the hosts that point at them do not wait for them.
   app_private_ip        = cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 10)
   monitoring_private_ip = cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 20)
+  database_private_ip   = cidrhost(cidrsubnet(var.vpc_cidr, 8, 1), 30)
   monitoring_ip         = var.monitoring_enabled ? local.monitoring_private_ip : null
 }
 
 module "network" {
   source = "../../modules/network"
 
-  name       = local.name
-  region     = var.region
-  cidr_block = var.vpc_cidr
+  name              = local.name
+  region            = var.region
+  cidr_block        = var.vpc_cidr
+  availability_zone = var.availability_zone
 }
 
 module "edge" {
@@ -31,6 +33,7 @@ module "edge" {
 
   name                   = local.name
   instance_type          = var.edge_instance_type
+  ami_id                 = var.edge_ami_id
   vpc_id                 = module.network.vpc_id
   vpc_cidr               = var.vpc_cidr
   subnet_id              = module.network.public_subnet_id
@@ -47,16 +50,19 @@ module "app" {
   source = "../../modules/app"
   count  = var.app_enabled ? 1 : 0
 
-  name                 = local.name
-  instance_type        = var.app_instance_type
-  architecture         = var.app_architecture
-  vpc_id               = module.network.vpc_id
-  vpc_cidr             = var.vpc_cidr
-  subnet_id            = module.network.private_subnet_id
-  private_ip           = local.app_private_ip
-  monitoring_ip        = local.monitoring_ip
-  deletion_protection  = var.deletion_protection
-  permissions_boundary = local.workload_boundary_arn
+  name          = local.name
+  instance_type = var.app_instance_type
+  ami_id        = var.app_ami_id
+  vpc_id        = module.network.vpc_id
+  subnet_id     = module.network.private_subnet_id
+  private_ip    = local.app_private_ip
+  database_ip   = var.database_enabled ? local.database_private_ip : null
+  monitoring_ip = local.monitoring_ip
+  # Uploads (for example photos) go to the attachments bucket.
+  attachments_bucket_arn = module.storage.attachments_bucket_arn
+  parameter_prefix       = "/bmc/${var.environment}/app"
+  deletion_protection    = var.deletion_protection
+  permissions_boundary   = local.workload_boundary_arn
 }
 
 # Plain host for now: Prometheus, Loki and Grafana are added later. The edge,
@@ -67,15 +73,20 @@ module "monitoring" {
 
   name          = local.name
   instance_type = var.monitoring_instance_type
-  architecture  = var.monitoring_architecture
+  ami_id        = var.monitoring_ami_id
   vpc_id        = module.network.vpc_id
   subnet_id     = module.network.private_subnet_id
   private_ip    = local.monitoring_private_ip
-  client_security_group_ids = concat(
-    [module.edge.security_group_id],
-    module.app[*].security_group_id,
-    module.database[*].security_group_id,
-  )
+  # Its secrets, for example the Grafana admin password.
+  parameter_prefix = "/bmc/${var.environment}/monitoring"
+  # Host name => security group, for the hosts that exist.
+  client_security_group_ids = {
+    for host, groups in {
+      edge     = [module.edge.security_group_id]
+      app      = module.app[*].security_group_id
+      database = module.database[*].security_group_id
+    } : host => groups[0] if length(groups) > 0
+  }
   deletion_protection  = var.deletion_protection
   permissions_boundary = local.workload_boundary_arn
 }
@@ -100,7 +111,7 @@ module "database" {
   instance_type             = var.database_instance_type
   vpc_id                    = module.network.vpc_id
   subnet_id                 = module.network.private_subnet_id
-  availability_zone         = module.network.availability_zone
+  private_ip                = local.database_private_ip
   data_volume_size          = var.database_volume_size
   deletion_protection       = var.deletion_protection
   client_security_group_ids = module.app[*].security_group_id

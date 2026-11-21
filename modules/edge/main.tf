@@ -8,14 +8,26 @@
 #             routing stay in Traefik; the client's IP is kept, because the
 #             private hosts' replies come back through this host.
 #
-# It runs no application code and holds no secrets. Administration goes
-# through SSM Session Manager; no SSH port is open.
+# It runs no application code, holds no secrets and may read no parameters.
+# Administration goes through SSM Session Manager; no SSH port is open.
 
-# Newest Amazon Linux 2023 for arm64 when the host is created. A newer image
-# does not replace a running host (ignore_changes below); replace it on
-# purpose with `terraform apply -replace=module.edge.aws_instance.edge`.
-data "aws_ssm_parameter" "al2023" {
-  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
+# The image is pinned (ami_id): changing it is a reviewed change that
+# replaces the host. The instance type decides the CPU architecture; the
+# check on aws_instance.edge stops a plan whose image does not match it.
+data "aws_ec2_instance_type" "edge" {
+  instance_type = var.instance_type
+}
+
+# Only Amazon's images are accepted. include_deprecated: the pin keeps
+# resolving after AWS deprecates the image (about three months after release).
+data "aws_ami" "edge" {
+  owners             = ["amazon"]
+  include_deprecated = true
+
+  filter {
+    name   = "image-id"
+    values = [var.ami_id]
+  }
 }
 
 locals {
@@ -24,12 +36,18 @@ locals {
 
 # --- Network access ---------------------------------------------------------
 
+# name_prefix and create_before_destroy: a replacement group is created next
+# to the old one (a group in use cannot be deleted first).
 resource "aws_security_group" "edge" {
-  name        = "${var.name}-edge"
+  name_prefix = "${var.name}-edge-"
   description = "Edge host: web traffic in, NAT for the private subnet"
   vpc_id      = var.vpc_id
 
   tags = { Name = "${var.name}-edge" }
+
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "aws_vpc_security_group_ingress_rule" "web" {
@@ -43,6 +61,9 @@ resource "aws_vpc_security_group_ingress_rule" "web" {
   cidr_ipv4         = "0.0.0.0/0"
 }
 
+# Everything from the private subnet: NAT traffic arrives addressed to
+# internet destinations, so it cannot be narrowed by port or address here. The
+# private hosts' own security groups limit what they send.
 resource "aws_vpc_security_group_ingress_rule" "private" {
   for_each = toset(var.private_cidrs)
 
@@ -72,26 +93,60 @@ data "aws_iam_policy_document" "assume" {
 }
 
 resource "aws_iam_role" "edge" {
-  name                 = "${var.name}-edge"
+  name_prefix          = "${var.name}-edge-"
   assume_role_policy   = data.aws_iam_policy_document.assume.json
   permissions_boundary = var.permissions_boundary
 }
 
-# Session Manager access instead of SSH; nothing else.
-resource "aws_iam_role_policy_attachment" "ssm_core" {
-  role       = aws_iam_role.edge.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+# Session Manager (and Run Command) only, instead of SSH. Not AWS's
+# AmazonSSMManagedInstanceCore: that policy also allows reading every
+# Parameter Store parameter (ssm:GetParameter on *), including other hosts'
+# secrets.
+data "aws_iam_policy_document" "session_manager" {
+  statement {
+    sid       = "RegisterWithSsm"
+    actions   = ["ssm:UpdateInstanceInformation"]
+    resources = ["*"]
+  }
+  statement {
+    sid = "SessionChannels"
+    actions = [
+      "ssmmessages:CreateControlChannel",
+      "ssmmessages:CreateDataChannel",
+      "ssmmessages:OpenControlChannel",
+      "ssmmessages:OpenDataChannel",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    sid = "RunCommandMessages"
+    actions = [
+      "ec2messages:AcknowledgeMessage",
+      "ec2messages:DeleteMessage",
+      "ec2messages:FailMessage",
+      "ec2messages:GetEndpoint",
+      "ec2messages:GetMessages",
+      "ec2messages:SendReply",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "session_manager" {
+  name   = "session-manager"
+  role   = aws_iam_role.edge.id
+  policy = data.aws_iam_policy_document.session_manager.json
 }
 
 resource "aws_iam_instance_profile" "edge" {
-  name = "${var.name}-edge"
-  role = aws_iam_role.edge.name
+  name_prefix = "${var.name}-edge-"
+  role        = aws_iam_role.edge.name
 }
 
 # --- Host -----------------------------------------------------------------------
 
 resource "aws_instance" "edge" {
-  ami           = data.aws_ssm_parameter.al2023.value
+  ami           = data.aws_ami.edge.id
   instance_type = var.instance_type
   subnet_id     = var.subnet_id
   # Needed during the first boot (packages) until the Elastic IP is attached.
@@ -101,10 +156,20 @@ resource "aws_instance" "edge" {
   # Forwards traffic that is not addressed to itself.
   source_dest_check = false
 
-  # IMDSv2 only.
+  # IMDSv2 only; hop limit 1 (nothing on this host runs in containers).
   metadata_options {
-    http_tokens   = "required"
-    http_endpoint = "enabled"
+    http_tokens                 = "required"
+    http_endpoint               = "enabled"
+    http_put_response_hop_limit = 1
+  }
+
+  # Burstable types only (t3, t4g): "standard" slows the CPU down when its
+  # credits run out instead of billing the extra ("unlimited").
+  dynamic "credit_specification" {
+    for_each = data.aws_ec2_instance_type.edge.burstable_performance_supported ? [var.cpu_credits] : []
+    content {
+      cpu_credits = credit_specification.value
+    }
   }
 
   root_block_device {
@@ -121,7 +186,10 @@ resource "aws_instance" "edge" {
   user_data_replace_on_change = true
 
   lifecycle {
-    ignore_changes = [ami]
+    precondition {
+      condition     = contains(data.aws_ec2_instance_type.edge.supported_architectures, data.aws_ami.edge.architecture)
+      error_message = "The image's architecture does not match the instance type (for example an arm64 image on an x86_64 type)."
+    }
   }
 
   tags = { Name = "${var.name}-edge" }

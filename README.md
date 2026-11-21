@@ -3,7 +3,7 @@
 Infrastructure for **BMC — Building Maintenance Coordinator** (ISEP LABDSOF 26/27). The application, its backlog, ADRs and the CI that builds the service images live in [LABSOFT-G9/LABDSOF_G9A](https://github.com/LABSOFT-G9/LABDSOF_G9A). This repository holds what runs underneath:
 
 - AWS resources as Terraform, written once as **internal modules** and used by every **environment**
-- the database host image (**AMI**), built with Packer
+- the database host image (**AMI**), built with Packer and configured by Ansible
 - runbooks
 
 Issues are tracked in the application repository (US-17 [#70](https://github.com/LABSOFT-G9/LABDSOF_G9A/issues/70), dev [#83](https://github.com/LABSOFT-G9/LABDSOF_G9A/issues/83), prod [#84](https://github.com/LABSOFT-G9/LABDSOF_G9A/issues/84)); reference them from PRs here with `Refs LABSOFT-G9/LABDSOF_G9A#N`.
@@ -22,7 +22,8 @@ environments/
   dev/                   calls the modules with dev values (terraform.tfvars)
   prod/                  the same modules with prod values
 bootstrap/               one-time: the S3 bucket for Terraform state, the CI user and the bmc-admin role
-ami/database/            Packer template, hardening and install scripts, compose.yaml, systemd units
+ami/database/            Packer template: builds the database image in dev's private subnet, configured by Ansible
+ansible/                 Ansible: database-image.yml and the roles base, docker, database (compose.yaml, scripts, systemd units)
 docs/runbooks/           operating procedures
 ```
 
@@ -35,9 +36,9 @@ Each environment has its own state file (`<env>/terraform.tfstate` in the state 
 | VPC | `10.10.0.0/16` | `10.20.0.0/16` |
 | Database host | off for now (`database_enabled = false`) | off for now |
 | Database AMI | newest build (`"*"`) | pinned version (`1.0.0`), changed only by a PR |
-| Instance | `t3.micro` | `t3.small` |
+| Database instance | `t3.micro` | `t3.small` |
 | Data volume | 10 GiB | 10 GiB |
-| Database subnet | private subnet, no internet route (the database host stays off for now) | private subnet with SSM interface endpoints (billed per hour) |
+| Database subnet | private subnet, outbound through the edge host (fixed IP `10.10.1.30`) | not set up yet (dev first) |
 | Backup retention | 7 days | 30 days |
 | Teardown | one step (`destroy`) | one step (`destroy`), after approval |
 
@@ -50,14 +51,14 @@ Both environments are short-lived: dev is created to test the setup and destroye
 Prod gets the same layout once dev is settled. Software on the hosts is added case by case.
 
 ```
-dev VPC 10.10.0.0/16, one availability zone
+dev VPC 10.10.0.0/16, one availability zone (eu-north-1a)
 ├─ Public subnet  10.10.0.0/24  route 0.0.0.0/0 -> internet gateway
-│    └─ Edge host  t4g.nano, Elastic IP. NAT for the private subnet;
+│    └─ Edge host  t3.nano, Elastic IP. NAT for the private subnet;
 │                  forwards TCP 80/443 to the application host
 └─ Private subnet 10.10.1.0/24  route 0.0.0.0/0 -> edge host
-     ├─ Application host  t4g.large, 10.10.1.10, no public IP; plain server,
+     ├─ Application host  t3.large, 10.10.1.10, no public IP; plain server,
      │                    nothing installed yet
-     ├─ Monitoring host   t4g.small, 10.10.1.20, no public IP; plain server,
+     ├─ Monitoring host   t3.small, 10.10.1.20, no public IP; plain server,
      │                    nothing installed yet (Prometheus, Loki, Grafana later)
      └─ Database host     module ready, off (database_enabled = false)
 S3 gateway endpoint on both route tables (free)
@@ -67,8 +68,9 @@ S3 gateway endpoint on both route tables (free)
 - The private hosts reach the internet only outbound, through the edge host's NAT; nothing on the internet can open a connection to them.
 - Monitoring is push-based: the edge, application and database hosts may send metrics (9090) and logs (3100) to the monitoring host, and nothing else reaches it. Grafana will be reached through Session Manager port forwarding, not exposed.
 - The edge host runs only the NAT and forwarding rules (nftables, `modules/edge/user-data.sh.tftpl`); no application code, no secrets.
-- All hosts: Amazon Linux 2023, IMDSv2 only, encrypted disks, administered through SSM Session Manager; no SSH port.
+- Edge, application and monitoring hosts: Amazon Linux 2023 (x86_64, image pinned in `terraform.tfvars`), IMDSv2 only, encrypted disks, administered through SSM Session Manager; no SSH port.
 - The VPC's default security group has no rules, so anything launched without a security group has no network access.
+- The account's default VPC in eu-north-1 (`172.31.0.0/16`, public subnets that hand out public IPs) was deleted on 2026-11-21, outside Terraform, so nothing can be launched there by accident. `aws ec2 create-default-vpc` recreates it if ever needed.
 
 ## Lifecycle: create, test, destroy
 
@@ -85,7 +87,7 @@ Until the next create, nothing in the environment costs anything.
 ## Database host
 
 ```
-ami/database (Packer)  ->  AMI bmc-database-<version>  ->  modules/database (Terraform)  ->  EC2 + data volume
+ami/database (Packer) + ansible/ (Ansible)  ->  AMI bmc-database-<version>  ->  modules/database (Terraform)  ->  EC2 + data volume
 ```
 
 - The **AMI** contains Ubuntu 24.04 LTS, hardening, Docker, the MySQL 8.4 and mysqld_exporter images pinned by digest and already pulled, the bootstrap and backup scripts and their systemd units. It contains no configuration and no secret.
@@ -114,7 +116,18 @@ Details and procedures: [docs/runbooks/database.md](docs/runbooks/database.md).
    ```
    Then set the GitHub settings below from the outputs. To rotate the key: create a new one the same way, check a CI run, then `aws iam delete-access-key --user-name bmc-ci --access-key-id <old id>` (a user has at most two keys).
 2. **Environments** through pull requests and CI (below). The first deploy creates the network and the buckets; the database host stays off (`database_enabled = false`) until the database AMI exists.
-3. **Later, for the database host**: the secrets (runbook, "Secrets"), the AMI (`packer init ami/database && packer build -var version=1.0.0 ami/database`), then `database_enabled = true` in a PR.
+3. **Later, for the database host**: the secrets (runbook, "Secrets"), the AMI (below), then `database_enabled = true` in a PR.
+
+### Building the database image
+
+Packer starts a temporary instance in **dev's private subnet** (dev must be applied first: network and edge host), reaches it through SSM Session Manager (no public IP, no open port) and lets Ansible configure it. Where you run it you need AWS credentials (`aws login`), Packer ≥ 1.11, `ansible-core` 2.21 (Python 3.12) and the [Session Manager plugin](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) for the AWS CLI.
+
+```
+packer init ami/database
+packer build -var version=1.0.0 ami/database
+```
+
+The result is `bmc-database-1.0.0`. Takes about 10 minutes; the temporary instance and its security group and role are deleted at the end.
 
 ### State
 
@@ -140,7 +153,7 @@ Terraform ≥ 1.10, AWS provider 6.x, Packer ≥ 1.11. CI uses Terraform 1.17.2 
 
 Everything is in one workflow, `.github/workflows/ci.yml`. Nothing changes in AWS until someone presses the button: Actions → CI → **Run workflow**, branch `main`, choose the environment (`dev` or `prod`) and the action (`apply` or `destroy`). The run plans first and shows the plan in its summary, then applies exactly that plan.
 
-- **Lint** (no AWS access): `terraform fmt`, `terraform validate` and TFLint for `environments/dev`, `environments/prod` and `bootstrap`; `packer fmt` and `packer validate`; ShellCheck.
+- **Lint** (no AWS access): `terraform fmt`, `terraform validate` and TFLint for `environments/dev`, `environments/prod` and `bootstrap`; `packer fmt` and `packer validate`; `ansible-lint` (26.11.0, with ansible-core 2.21.6); ShellCheck.
 - **Plan** (job `plan`, one per environment, role `bmc-admin`): the plan is shown in the job summary and saved as an artifact for one day.
 - **Apply** (job `apply`, button only, on `main`, in the GitHub environment of the same name, role `bmc-admin`): applies exactly the plan saved earlier in the same run; if the state changed in between, Terraform refuses and nothing changes. The `prod` approval is asked even when the prod plan has no changes (the job then ends without touching AWS), because a GitHub environment gates a whole job.
 - Pull requests from forks stop after lint (GitHub gives them no secrets).
