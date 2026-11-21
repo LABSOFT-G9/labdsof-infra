@@ -3,7 +3,8 @@
 # 1. mount the MySQL data volume (format it only if it is empty)
 # 2. read the database secrets from SSM Parameter Store into /run/bmc (tmpfs)
 # 3. start MySQL and mysqld_exporter
-# 4. create or update the service databases and their users (every boot)
+# 4. remove root@'%' and create or update the service databases and their
+#    users (every boot)
 # Configuration comes from /etc/bmc/database.env (Terraform user data).
 set -euo pipefail
 # shellcheck disable=SC1091
@@ -83,26 +84,26 @@ chmod 0400 /run/bmc/exporter.my.cnf
 # --- 3. Containers ----------------------------------------------------------
 docker compose -f /opt/bmc/compose.yaml up -d --wait
 
-# --- 4. Service databases -----------------------------------------------------
+# --- 4. Users and service databases ------------------------------------------
 # Every boot, so a new service or a changed password in Parameter Store is
 # applied by a reboot; the statements change nothing that is already right.
-# Each user may only use its own database. The SQL file holds passwords and
-# lives in /run/bmc (tmpfs, mode 0600) only until MySQL has read it.
-if [ "${#databases[@]}" -gt 0 ]; then
-  sql=/run/bmc/databases.sql
-  : >"$sql"
-  for db in "${databases[@]}"; do
-    password=$(sql_quote "$(value "users/$db")")
-    cat >>"$sql" <<EOF
+# root may only log in from inside the host (older data directories still have
+# root@'%'). Each service user may only use its own database. The SQL file
+# holds passwords and lives in /run/bmc (tmpfs, mode 0600) only until MySQL
+# has read it; root connects over the container's socket (root@localhost).
+sql=/run/bmc/setup.sql
+echo "DROP USER IF EXISTS 'root'@'%';" >"$sql"
+for db in "${databases[@]}"; do
+  password=$(sql_quote "$(value "users/$db")")
+  cat >>"$sql" <<EOF
 CREATE DATABASE IF NOT EXISTS \`$db\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 CREATE USER IF NOT EXISTS '$db'@'%' IDENTIFIED BY '$password';
 ALTER USER '$db'@'%' IDENTIFIED BY '$password';
 GRANT ALL PRIVILEGES ON \`$db\`.* TO '$db'@'%';
 EOF
-  done
-  unset password
-  docker exec -i -e MYSQL_PWD="$(cat /run/bmc/root_password)" bmc-mysql mysql --user=root <"$sql"
-  rm -f "$sql"
-  echo "Service databases ready: ${databases[*]}"
-fi
+done
+unset password
+docker exec -i -e MYSQL_PWD="$(cat /run/bmc/root_password)" bmc-mysql mysql --user=root <"$sql"
+rm -f "$sql"
+echo "root limited to localhost; service databases ready: ${databases[*]:-none}"
 echo "BMC database started for ${BMC_ENVIRONMENT:-unknown}"
