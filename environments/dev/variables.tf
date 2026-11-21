@@ -60,6 +60,11 @@ variable "database_enabled" {
   type        = bool
 }
 
+variable "databases" {
+  description = "Service databases on the database host, one user each; passwords in /bmc/<env>/database/users/<name>."
+  type        = list(string)
+}
+
 variable "database_ami_version" {
   description = "bmc-database AMI version; \"*\" = newest build."
   type        = string

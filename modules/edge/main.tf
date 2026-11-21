@@ -188,6 +188,11 @@ resource "aws_instance" "edge" {
   user_data_replace_on_change = true
 
   lifecycle {
+    # A stopped instance has no public IP, so AWS reports this as false while
+    # dev is stopped; without this, every plan then would replace the host.
+    # The start action (CI) makes sure the edge host has a public IP.
+    ignore_changes = [associate_public_ip_address]
+
     precondition {
       condition     = contains(data.aws_ec2_instance_type.edge.supported_architectures, data.aws_ami.edge.architecture)
       error_message = "The image's architecture does not match the instance type (for example an arm64 image on an x86_64 type)."

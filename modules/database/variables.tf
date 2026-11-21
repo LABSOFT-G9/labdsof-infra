@@ -98,3 +98,14 @@ variable "private_ip" {
   type        = string
   default     = null
 }
+
+variable "databases" {
+  description = "One MySQL database and one user of the same name per service, created at every boot. Each user's password is <parameter prefix>/users/<name> in Parameter Store."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for d in var.databases : can(regex("^[a-z][a-z0-9_]{0,31}$", d))])
+    error_message = "Database names must be lowercase letters, digits and _, starting with a letter, at most 32 characters."
+  }
+}

@@ -10,6 +10,7 @@ AWS_REGION=${region}
 BMC_BACKUPS_BUCKET=${backups_bucket}
 BMC_PARAMETER_PREFIX=${parameter_prefix}
 BMC_DATA_VOLUME_ID=${data_volume_id}
+BMC_DATABASES="${join(" ", databases)}"
 EOF
 chmod 0644 /etc/bmc/database.env
 

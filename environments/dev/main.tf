@@ -61,8 +61,10 @@ module "app" {
   # Uploads (for example photos) go to the attachments bucket.
   attachments_bucket_arn = module.storage.attachments_bucket_arn
   parameter_prefix       = "/bmc/${var.environment}/app"
-  deletion_protection    = var.deletion_protection
-  permissions_boundary   = local.workload_boundary_arn
+  # The services' database passwords (not root, backup or exporter).
+  database_users_parameter_path = var.database_enabled ? "/bmc/${var.environment}/database/users" : null
+  deletion_protection           = var.deletion_protection
+  permissions_boundary          = local.workload_boundary_arn
 }
 
 # Plain host for now: Prometheus, Loki and Grafana are added later. The edge,
@@ -115,6 +117,8 @@ module "database" {
   data_volume_size          = var.database_volume_size
   deletion_protection       = var.deletion_protection
   client_security_group_ids = module.app[*].security_group_id
+  # One database and one user per service (ADR-004).
+  databases = var.databases
   # Agents push to the monitoring host; nothing scrapes the database host.
   monitoring_ip        = local.monitoring_ip
   backups_bucket       = module.storage.backups_bucket

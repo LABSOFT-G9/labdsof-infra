@@ -216,6 +216,7 @@ resource "aws_instance" "database" {
     parameter_prefix = local.parameter_prefix
     data_volume_id   = aws_ebs_volume.data.id
     backup_schedule  = var.backup_schedule
+    databases        = var.databases
   })
   user_data_replace_on_change = true
 
