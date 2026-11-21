@@ -1,0 +1,68 @@
+---
+# MySQL 8.4 and mysqld_exporter (pinned by digest in files/compose.yaml), the
+# bootstrap and backup scripts and their systemd units. The units are enabled
+# at boot by the Terraform user data (modules/database), not here.
+
+- name: Install the tools the scripts use
+  ansible.builtin.apt:
+    name:
+      - gzip
+      - jq
+      - nvme-cli
+    install_recommends: false
+    update_cache: true
+
+# AWS CLI v2: backups to S3, secrets from SSM. The SSM agent ships with
+# Ubuntu's AWS images.
+- name: Install the AWS CLI
+  ansible.builtin.command: snap install aws-cli --classic
+  args:
+    creates: /snap/bin/aws
+
+- name: Create the BMC directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /opt/bmc
+    - /opt/bmc/bin
+    - /etc/bmc
+
+- name: Install the Compose file
+  ansible.builtin.copy:
+    src: compose.yaml
+    dest: /opt/bmc/compose.yaml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the bootstrap and backup scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /opt/bmc/bin/{{ item }}
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - bootstrap.sh
+    - backup.sh
+
+- name: Install the systemd units
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /etc/systemd/system/{{ item }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - bmc-database.service
+    - bmc-backup.service
+    - bmc-backup.timer
+
+# Pulled now, so a running host never needs Docker Hub.
+- name: Pull the pinned MySQL and exporter images
+  ansible.builtin.command: docker compose -f /opt/bmc/compose.yaml pull
+  changed_when: true

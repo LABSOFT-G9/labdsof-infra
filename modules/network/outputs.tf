@@ -1,16 +1,24 @@
 output "vpc_id" {
-  value = aws_vpc.this.id
+  description = "The environment's VPC."
+  value       = aws_vpc.this.id
 }
 
 output "public_subnet_id" {
-  value = aws_subnet.public.id
+  description = "Public subnet: the edge host only."
+  value       = aws_subnet.public.id
 }
 
 output "private_subnet_id" {
-  value = aws_subnet.private.id
+  description = "Private subnet: every host except the edge host."
+  value       = aws_subnet.private.id
 }
 
-output "availability_zone" {
-  description = "Zone of both subnets; volumes attached to hosts here must use it."
-  value       = local.az
+output "private_subnet_cidr" {
+  description = "Address range of the private subnet; the edge host NATs it."
+  value       = aws_subnet.private.cidr_block
+}
+
+output "private_route_table_id" {
+  description = "For the edge host's NAT route."
+  value       = aws_route_table.private.id
 }

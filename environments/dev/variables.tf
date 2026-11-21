@@ -1,5 +1,3 @@
-# tflint-ignore-file: terraform_unused_declarations # main.tf is commented out
-
 variable "environment" {
   type = string
 }
@@ -8,8 +6,53 @@ variable "region" {
   type = string
 }
 
+variable "availability_zone" {
+  description = "The one availability zone everything runs in, for example eu-north-1a."
+  type        = string
+}
+
 variable "vpc_cidr" {
   type = string
+}
+
+variable "edge_instance_type" {
+  description = "Edge host (NAT and web forwarding), for example t3.nano."
+  type        = string
+}
+
+variable "edge_ami_id" {
+  description = "Pinned image of the edge host; must match edge_instance_type's architecture."
+  type        = string
+}
+
+variable "app_enabled" {
+  description = "Create the application host."
+  type        = bool
+}
+
+variable "app_instance_type" {
+  description = "Application host instance type."
+  type        = string
+}
+
+variable "app_ami_id" {
+  description = "Pinned image of the application host; must match app_instance_type's architecture."
+  type        = string
+}
+
+variable "monitoring_enabled" {
+  description = "Create the monitoring host."
+  type        = bool
+}
+
+variable "monitoring_instance_type" {
+  description = "Monitoring host instance type."
+  type        = string
+}
+
+variable "monitoring_ami_id" {
+  description = "Pinned image of the monitoring host; must match monitoring_instance_type's architecture."
+  type        = string
 }
 
 variable "database_enabled" {
@@ -29,11 +72,6 @@ variable "database_instance_type" {
 variable "database_volume_size" {
   description = "MySQL data volume in GiB."
   type        = number
-}
-
-variable "database_in_private_subnet" {
-  description = "Private subnet plus SSM interface endpoints (billed per hour), or public subnet with an outbound-only public IP."
-  type        = bool
 }
 
 variable "deletion_protection" {
