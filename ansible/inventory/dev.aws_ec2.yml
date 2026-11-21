@@ -15,6 +15,5 @@ keyed_groups:
     prefix: ""
     separator: ""
 compose:
-  # The SSM connection reaches a host by its instance ID; there is no SSH.
+  # SSH goes through Session Manager, which reaches a host by its instance ID.
   ansible_host: instance_id
-  ansible_aws_ssm_instance_id: instance_id
