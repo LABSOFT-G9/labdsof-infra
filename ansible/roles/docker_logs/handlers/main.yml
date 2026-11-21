@@ -1,0 +1,6 @@
+---
+# Containers with restart: unless-stopped come back with Docker.
+- name: Restart Docker
+  ansible.builtin.systemd_service:
+    name: docker
+    state: restarted

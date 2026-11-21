@@ -44,12 +44,12 @@ variable "private_ip" {
 }
 
 variable "client_security_group_ids" {
-  description = "Hosts allowed to push metrics (9090): host name => its security group, for example { edge = sg-..., app = sg-... }."
+  description = "Hosts allowed to push metrics (9090) and logs (3100): host name => its security group, for example { edge = sg-..., app = sg-... }."
   type        = map(string)
 }
 
 variable "root_volume_size" {
-  description = "Root volume in GiB (Prometheus keeps its metrics on it)."
+  description = "Root volume in GiB (Prometheus and Loki keep their data on it)."
   type        = number
   default     = 20
 }

@@ -1,5 +1,6 @@
 ---
-# Prometheus and Grafana on the monitoring host, as containers (docker role).
+# Prometheus, Loki and Grafana on the monitoring host, as containers (docker
+# role).
 
 - name: Create the monitoring directory
   ansible.builtin.file:
@@ -19,6 +20,7 @@
   loop:
     - compose.yaml
     - prometheus.yml
+    - loki-config.yaml
     - grafana-datasources.yml
   notify: Restart the monitoring stack
 

@@ -25,12 +25,20 @@
     state: present
   when: ansible_facts['os_family'] == 'RedHat'
 
-- name: Let Alloy read Docker's container metrics
+- name: Let Alloy read Docker's container metrics and logs
   ansible.builtin.user:
     name: alloy
     groups: docker
     append: true
   when: alloy_docker_metrics
+  notify: Restart Alloy
+
+- name: Let Alloy read the system journal
+  ansible.builtin.user:
+    name: alloy
+    groups: systemd-journal
+    append: true
+  when: alloy_logs
   notify: Restart Alloy
 
 # The database host's bootstrap.sh writes it at boot; when Alloy is installed

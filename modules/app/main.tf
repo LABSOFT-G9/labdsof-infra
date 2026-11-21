@@ -78,9 +78,9 @@ resource "aws_vpc_security_group_egress_rule" "mysql" {
   cidr_ipv4         = "${var.database_ip}/32"
 }
 
-# Push metrics (9090) to the monitoring host, when there is one.
+# Push metrics (9090) and logs (3100) to the monitoring host, when there is one.
 resource "aws_vpc_security_group_egress_rule" "monitoring" {
-  for_each = var.monitoring_ip == null ? {} : { metrics = 9090 }
+  for_each = var.monitoring_ip == null ? {} : { metrics = 9090, logs = 3100 }
 
   security_group_id = aws_security_group.app.id
   description       = "Push ${each.key} to the monitoring host"
