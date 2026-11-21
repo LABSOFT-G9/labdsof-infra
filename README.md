@@ -106,6 +106,31 @@ aws ssm start-session --target <monitoring instance id> \
 
 Then open <http://localhost:3000>, user `admin`, password in Parameter Store `/bmc/dev/monitoring/grafana_admin_password` (`aws ssm get-parameter --with-decryption …`, on your own machine). Prometheus is already its data source; metrics carry the labels `host`, `role` and `environment`. Prometheus keeps 7 days.
 
+## Application deploy
+
+The application repository deploys to dev from its own pipeline (`deploy.yml`), with no SSH and no inbound access:
+
+```
+deploy job (LABSOFT-G9/LABDSOF_G9A, environment dev)
+  1. signs in as the IAM user bmc-deploy-dev (bootstrap/deploy-access.tf)
+  2. finds the dev application host (tags Environment=dev, Role=app) and the edge host's public IP (APP_URL)
+  3. SSM Run Command on the application host:
+       writes compose.yaml to /opt/bmc-app
+       bmc-app-deploy <tag>   (ansible/roles/app)
+  4. smoke check and ZAP against http://<edge IP>
+```
+
+`bmc-app-deploy <tag>` reads the service database users' passwords from Parameter Store (`/bmc/dev/database/users/*`) into `/run/bmc-app/deploy.env` (memory only, root only) as `<NAME>_DB_PASSWORD`, with `BMC_TAG`, `DB_HOST` and `DB_PORT`, then runs `docker compose pull` and `up -d`. The images are public in GHCR, so no registry login is needed.
+
+`bmc-deploy-dev` can only run `AWS-RunShellScript` on instances tagged `Environment=dev` and `Role=app`, read its command results and list instances. Its access key is created by hand and stored only in the application repository's `dev` environment, never printed:
+
+```
+aws iam create-access-key --user-name bmc-deploy-dev --query 'AccessKey.[AccessKeyId,SecretAccessKey]' --output text \
+  | { read -r id secret
+      gh secret set AWS_ACCESS_KEY_ID     --repo LABSOFT-G9/LABDSOF_G9A --env dev --body "$id"
+      gh secret set AWS_SECRET_ACCESS_KEY --repo LABSOFT-G9/LABDSOF_G9A --env dev --body "$secret"; }
+```
+
 ## Lifecycle: create, test, destroy
 
 1. **Create**: merge to `main`. The run plans dev and prod, then each environment whose plan has changes waits for approval: open the run, read the plan in its summary, **Review deployments** → approve. dev applies first, prod only after dev succeeded. To apply without a new merge, use the button: Actions → CI → Run workflow on `main`, environment, action `apply`.

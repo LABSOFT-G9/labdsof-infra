@@ -1,0 +1,55 @@
+#!/bin/bash
+# Deploys the application on this host:   bmc-app-deploy <image tag>
+#
+# The application repository's deploy job copies its compose.yaml to
+# /opt/bmc-app and calls this through SSM Run Command (no SSH). This script
+# 1. reads the service database users' passwords from SSM Parameter Store into
+#    /run/bmc-app/deploy.env (tmpfs, root only), with the image tag and the
+#    database address, for Compose to interpolate;
+# 2. pulls the images of that tag and starts or updates the containers
+#    (Compose restarts only the containers whose image changed);
+# 3. removes images no container uses any more.
+# Configuration: /etc/bmc/app.env (Ansible, ansible/roles/app).
+set -euo pipefail
+
+tag=${1:?usage: bmc-app-deploy <image tag>}
+[[ "$tag" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || { echo "Invalid image tag: $tag" >&2; exit 1; }
+
+# shellcheck disable=SC1091
+source /etc/bmc/app.env
+: "${AWS_REGION:?}" "${BMC_ENVIRONMENT:?}" "${BMC_DB_HOST:?}" "${BMC_DB_USERS_PREFIX:?}"
+
+dir=/opt/bmc-app
+[ -f "$dir/compose.yaml" ] || { echo "Missing $dir/compose.yaml" >&2; exit 1; }
+
+umask 077
+install -d -m 0700 /run/bmc-app
+env=/run/bmc-app/deploy.env
+
+read -r -a databases <<<"${BMC_DATABASES:-}"
+{
+  echo "BMC_TAG=$tag"
+  echo "BMC_ENVIRONMENT=$BMC_ENVIRONMENT"
+  echo "DB_HOST=$BMC_DB_HOST"
+  echo "DB_PORT=3306"
+} >"$env"
+
+if [ "${#databases[@]}" -gt 0 ]; then
+  params=$(aws ssm get-parameters --region "$AWS_REGION" --with-decryption \
+    --names "${databases[@]/#/$BMC_DB_USERS_PREFIX/}" --output json)
+  missing=$(jq -r '.InvalidParameters | join(", ")' <<<"$params")
+  [ -z "$missing" ] || { echo "Missing SSM parameters: $missing" >&2; exit 1; }
+  for db in "${databases[@]}"; do
+    # issue -> ISSUE_DB_PASSWORD
+    printf '%s_DB_PASSWORD=%s\n' "${db^^}" \
+      "$(jq -r --arg n "$BMC_DB_USERS_PREFIX/$db" '.Parameters[] | select(.Name == $n) | .Value' <<<"$params")" >>"$env"
+  done
+  unset params
+fi
+
+cd "$dir"
+docker compose --env-file "$env" pull --quiet
+docker compose --env-file "$env" up -d --remove-orphans
+docker image prune -f >/dev/null
+docker compose --env-file "$env" ps --format '{{.Service}}: {{.Status}}'
+echo "Deployed $tag to $BMC_ENVIRONMENT"
