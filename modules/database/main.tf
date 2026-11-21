@@ -185,7 +185,7 @@ resource "aws_instance" "database" {
   disable_api_termination     = var.deletion_protection
 
   # IMDSv2 only. Hop limit 1: only the host's own scripts get the role's
-  # credentials, not the MySQL and exporter containers (some images default
+  # credentials, not the MySQL container (some images default
   # to 2).
   metadata_options {
     http_tokens                 = "required"

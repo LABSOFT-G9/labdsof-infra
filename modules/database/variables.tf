@@ -35,7 +35,7 @@ variable "cpu_credits" {
 }
 
 variable "root_volume_size" {
-  description = "Root volume in GiB: OS, Docker, the MySQL and exporter images, logs. MySQL data is on the data volume."
+  description = "Root volume in GiB: OS, Docker, the MySQL image, logs. MySQL data is on the data volume."
   type        = number
   default     = 12
 }

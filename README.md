@@ -36,13 +36,13 @@ Each environment has its own state file (`<env>/terraform.tfstate` in the state 
 | VPC | `10.10.0.0/16` | `10.20.0.0/16` |
 | Database host | on (`database_enabled = true`), image `bmc-database-1.0.0` | off for now |
 | Database AMI | newest build (`"*"`) | pinned version (`1.0.0`), changed only by a PR |
-| Database instance | `t3.small` (2 GiB: MySQL, exporter and the Alloy agent do not fit in 1 GiB) | `t3.small` |
+| Database instance | `t3.small` (2 GiB: MySQL and the Alloy agent do not fit in 1 GiB) | `t3.small` |
 | Data volume | 10 GiB | 10 GiB |
 | Database subnet | private subnet, outbound through the edge host (fixed IP `10.10.1.30`) | not set up yet (dev first) |
 | Backup retention | 7 days | 30 days |
 | Teardown | one step (`destroy`) | one step (`destroy`), after approval |
 
-In both, MySQL (3306) is reachable only from the application host's security group, the exporter (9104) only from monitoring groups, and no SSH port is open; administration goes through SSM Session Manager.
+In both, MySQL (3306) is reachable only from the application host's security group (MySQL metrics are read on the host by the Alloy agent), and no SSH port is open; administration goes through SSM Session Manager.
 
 Both environments are short-lived: dev is created to test the setup and destroyed afterwards; prod is created later, only to show a promotion, and destroyed after the showcase. That is why neither has termination protection or Object Lock, and their buckets can be deleted while not empty. For a long-lived prod, set `deletion_protection = true`, `force_destroy_buckets = false` and `backup_lock_days` above 0 in `environments/prod/terraform.tfvars` (the lock needs a new backups bucket).
 
@@ -125,7 +125,7 @@ Until the next create, nothing in the environment costs anything.
 ami/database (Packer) + ansible/ (Ansible)  ->  AMI bmc-database-<version>  ->  modules/database (Terraform)  ->  EC2 + data volume
 ```
 
-- The **AMI** contains Ubuntu 24.04 LTS, hardening, Docker, the MySQL 8.4 and mysqld_exporter images pinned by digest and already pulled, the bootstrap and backup scripts and their systemd units. It contains no configuration and no secret.
+- The **AMI** contains Ubuntu 24.04 LTS, hardening, Docker, the MySQL 8.4 image pinned by digest and already pulled, the bootstrap and backup scripts and their systemd units. It contains no configuration and no secret.
 - **Terraform** starts the instance from the AMI and passes the configuration (environment, bucket, parameter path, data volume) through user data.
 - At boot the host mounts the **data volume** (formatted only when empty), reads the **secrets from SSM Parameter Store** (`/bmc/<env>/database/*`) into memory (`/run/bmc`), and starts MySQL and the exporter.
 - **Backups**: a nightly `mysqldump` of all databases, compressed, to `s3://bmc-<env>-backups-<account>/mysql/<env>/`. The host can only add objects there; the bucket's lifecycle rule rotates them.

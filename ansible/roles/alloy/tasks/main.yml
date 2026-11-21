@@ -33,6 +33,16 @@
   when: alloy_docker_metrics
   notify: Restart Alloy
 
+# The database host's bootstrap.sh writes it at boot; when Alloy is installed
+# after that boot, the alloy group did not exist yet, so allow it now.
+- name: Let Alloy read the MySQL connection file
+  ansible.builtin.file:
+    path: "{{ alloy_mysql_dsn_file }}"
+    group: alloy
+    mode: "0440"
+  when: alloy_mysql_dsn_file | length > 0
+  notify: Restart Alloy
+
 - name: Install the Alloy configuration
   ansible.builtin.template:
     src: config.alloy.j2

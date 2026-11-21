@@ -20,26 +20,11 @@ services:
     volumes:
       - /var/lib/bmc-mysql/data:/var/lib/mysql
       - /run/bmc/root_password:/run/bmc/root_password:ro
-      # Creates the backup and exporter users on the first start only.
+      # Creates the backup and exporter users on the first start only (exporter:
+      # MySQL metrics, read by the Alloy agent on this host).
       - /run/bmc/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 --silent"]
       interval: 10s
       timeout: 5s
       retries: 12
-
-  mysqld-exporter:
-    # prom/mysqld-exporter:v0.17.2
-    image: prom/mysqld-exporter:v0.17.2@sha256:20b5b23a98ce3998349042a999e56d22819b46da38fa4e4e9ca0155c975c95d5
-    container_name: bmc-mysqld-exporter
-    restart: unless-stopped
-    command:
-      - --config.my-cnf=/run/bmc/exporter.my.cnf
-      - --mysqld.address=mysql:3306
-    ports:
-      - "9104:9104"
-    volumes:
-      - /run/bmc/exporter.my.cnf:/run/bmc/exporter.my.cnf:ro
-    depends_on:
-      mysql:
-        condition: service_healthy
