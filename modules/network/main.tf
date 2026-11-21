@@ -1,6 +1,8 @@
-# Network for one environment: a VPC with one public and one private subnet,
-# an internet gateway, a free S3 gateway endpoint and, optionally, the
-# interface endpoints a private host needs to reach SSM without a NAT gateway.
+# Network for one environment, in one availability zone: a VPC with one
+# public subnet (the edge host) and one private subnet (every other host), an
+# internet gateway, a free S3 gateway endpoint and, optionally, SSM interface
+# endpoints. The private subnet's route to the internet (0.0.0.0/0 through the
+# edge host's NAT) is added by modules/edge.
 
 data "aws_availability_zones" "available" {
   state = "available"
@@ -16,6 +18,13 @@ resource "aws_vpc" "this" {
   enable_dns_hostnames = true
 
   tags = { Name = "${var.name}-vpc" }
+}
+
+# The VPC's default security group, stripped of its rules: anything launched
+# without a security group gets no network access at all.
+resource "aws_default_security_group" "this" {
+  vpc_id = aws_vpc.this.id
+  tags   = { Name = "${var.name}-default-unused" }
 }
 
 resource "aws_internet_gateway" "this" {
@@ -51,7 +60,8 @@ resource "aws_route_table" "public" {
   tags = { Name = "${var.name}-public" }
 }
 
-# No default route: the private subnet has no internet access.
+# The default route (0.0.0.0/0 through the edge host) is added by
+# modules/edge; without it the private subnet has no internet access.
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.this.id
   tags   = { Name = "${var.name}-private" }

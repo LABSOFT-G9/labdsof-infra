@@ -12,7 +12,9 @@ Issues are tracked in the application repository (US-17 [#70](https://github.com
 
 ```
 modules/                 internal modules, no environment-specific values
-  network/               VPC, public + private subnet, S3 gateway endpoint, optional SSM endpoints
+  network/               VPC, public + private subnet, S3 gateway endpoint, optional SSM endpoints, locked default security group
+  edge/                  the only public host: NAT for the private subnet, forwards 80/443 to the application host
+  app/                   application host: plain EC2 in the private subnet, security group, IAM role
   storage/               S3 buckets: attachments and backups (private, encrypted, versioned, lifecycle)
   database/              EC2 database host from the AMI, encrypted data volume, IAM role, security group
 environments/
@@ -34,13 +36,35 @@ Each environment has its own state file (`<env>/terraform.tfstate` in the state 
 | Database AMI | newest build (`"*"`) | pinned version (`1.0.0`), changed only by a PR |
 | Instance | `t3.micro` | `t3.small` |
 | Data volume | 10 GiB | 10 GiB |
-| Database subnet | public subnet, outbound-only public IP, no NAT or endpoint cost | private subnet with SSM interface endpoints (billed per hour) |
+| Database subnet | private subnet, no internet route (the database host stays off for now) | private subnet with SSM interface endpoints (billed per hour) |
 | Backup retention | 7 days | 30 days |
 | Teardown | one step (`destroy`) | one step (`destroy`), after approval |
 
 In both, MySQL (3306) is reachable only from the application host's security group, the exporter (9104) only from monitoring groups, and no SSH port is open; administration goes through SSM Session Manager.
 
 Both environments are short-lived: dev is created to test the setup and destroyed afterwards; prod is created later, only to show a promotion, and destroyed after the showcase. That is why neither has termination protection or Object Lock, and their buckets can be deleted while not empty. For a long-lived prod, set `deletion_protection = true`, `force_destroy_buckets = false` and `backup_lock_days` above 0 in `environments/prod/terraform.tfvars` (the lock needs a new backups bucket).
+
+## Network (dev)
+
+Prod gets the same layout once dev is settled. Software on the hosts is added case by case.
+
+```
+dev VPC 10.10.0.0/16, one availability zone
+├─ Public subnet  10.10.0.0/24  route 0.0.0.0/0 -> internet gateway
+│    └─ Edge host  t4g.nano, Elastic IP. NAT for the private subnet;
+│                  forwards TCP 80/443 to the application host
+└─ Private subnet 10.10.1.0/24  route 0.0.0.0/0 -> edge host
+     ├─ Application host  t4g.large, 10.10.1.10, no public IP; plain server,
+     │                    nothing installed yet
+     └─ Database host     module ready, off (database_enabled = false)
+S3 gateway endpoint on both route tables (free)
+```
+
+- Web traffic: internet -> edge host :80/443 -> application host. The client's address is kept. Nothing answers yet: the application host has no software.
+- The private hosts reach the internet only outbound, through the edge host's NAT; nothing on the internet can open a connection to them.
+- The edge host runs only the NAT and forwarding rules (nftables, `modules/edge/user-data.sh.tftpl`); no application code, no secrets.
+- Both hosts: Amazon Linux 2023, IMDSv2 only, encrypted disks, administered through SSM Session Manager; no SSH port.
+- The VPC's default security group has no rules, so anything launched without a security group has no network access.
 
 ## Lifecycle: create, test, destroy
 
@@ -155,7 +179,7 @@ What this means:
 
 ## Not here yet
 
-- The application host and its module (US-17), and how it deploys the images from the application repository (DEC-12 linking options).
+- Software on the application host, and how it deploys the images from the application repository (DEC-12 linking options). The host itself is `modules/app`.
 - The AMI build pipeline (Packer in CI).
 - Monitoring targets and alerts (US-20).
 

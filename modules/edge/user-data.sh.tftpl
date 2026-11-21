@@ -1,0 +1,53 @@
+#!/bin/bash
+# Edge host: IP forwarding, NAT for the private subnet and, when configured,
+# forwarding of TCP 80/443 to the application host. Rendered by Terraform
+# (modules/edge); nftables rules are matched by address, because the host has
+# a single network interface for both sides.
+set -euo pipefail
+
+for attempt in 1 2 3 4 5; do
+  dnf install -y nftables && break
+  sleep $((attempt * 10))
+done
+
+cat >/etc/sysctl.d/90-bmc-edge.conf <<'EOF'
+net.ipv4.ip_forward = 1
+EOF
+sysctl --system >/dev/null
+
+cat >/etc/nftables/bmc-edge.nft <<'EOF'
+table ip bmc_edge {
+  set private {
+    type ipv4_addr
+    flags interval
+    elements = { ${join(", ", private_cidrs)} }
+  }
+
+  chain prerouting {
+    type nat hook prerouting priority dstnat; policy accept;
+%{ if forward_to_ip != null ~}
+    # Web traffic from outside the VPC goes to the application host.
+    ip saddr != ${vpc_cidr} tcp dport { 80, 443 } dnat to ${forward_to_ip}
+%{ endif ~}
+  }
+
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    # The private subnet leaves with this host's address.
+    ip saddr @private ip daddr != ${vpc_cidr} masquerade
+  }
+
+  chain forward {
+    type filter hook forward priority filter; policy drop;
+    ct state established,related accept
+    ip saddr @private ip daddr != ${vpc_cidr} accept
+%{ if forward_to_ip != null ~}
+    ct status dnat ip daddr ${forward_to_ip} tcp dport { 80, 443 } accept
+%{ endif ~}
+  }
+}
+EOF
+
+echo 'include "/etc/nftables/bmc-edge.nft"' >/etc/sysconfig/nftables.conf
+systemctl enable --now nftables
+nft list ruleset

@@ -1,5 +1,3 @@
-# tflint-ignore-file: terraform_unused_declarations # main.tf is commented out
-
 variable "environment" {
   type = string
 }
@@ -10,6 +8,26 @@ variable "region" {
 
 variable "vpc_cidr" {
   type = string
+}
+
+variable "edge_instance_type" {
+  description = "Edge host (NAT and web forwarding); arm64, for example t4g.nano."
+  type        = string
+}
+
+variable "app_enabled" {
+  description = "Create the application host."
+  type        = bool
+}
+
+variable "app_instance_type" {
+  description = "Application host instance type."
+  type        = string
+}
+
+variable "app_architecture" {
+  description = "arm64 or x86_64; must match app_instance_type."
+  type        = string
 }
 
 variable "database_enabled" {
@@ -29,11 +47,6 @@ variable "database_instance_type" {
 variable "database_volume_size" {
   description = "MySQL data volume in GiB."
   type        = number
-}
-
-variable "database_in_private_subnet" {
-  description = "Private subnet plus SSM interface endpoints (billed per hour), or public subnet with an outbound-only public IP."
-  type        = bool
 }
 
 variable "deletion_protection" {
