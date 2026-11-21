@@ -307,6 +307,27 @@ jobs:
               aws ec2 start-instances --instance-ids "$edge" --query 'StartingInstances[].[InstanceId,CurrentState.Name]' --output text
               aws ec2 wait instance-running --instance-ids "$edge"
             fi
+            # The edge host needs a public IP for NAT. If AWS gave it none on
+            # start, ask for one on its network interface.
+            edge=$(ids running edge)
+            if [ -n "$edge" ]; then
+              ip=$(aws ec2 describe-instances --instance-ids "$edge" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+              if [ "$ip" = None ]; then
+                eni=$(aws ec2 describe-instances --instance-ids "$edge" --query 'Reservations[0].Instances[0].NetworkInterfaces[0].NetworkInterfaceId' --output text)
+                echo "Edge host has no public IP; assigning one to $eni"
+                aws ec2 modify-network-interface-attribute --network-interface-id "$eni" --associate-public-ip-address
+                for _ in $(seq 1 12); do
+                  ip=$(aws ec2 describe-instances --instance-ids "$edge" --query 'Reservations[0].Instances[0].PublicIpAddress' --output text)
+                  [ "$ip" != None ] && break
+                  sleep 5
+                done
+              fi
+              if [ "$ip" = None ]; then
+                echo "::error::The edge host has no public IP, so the private hosts have no NAT. Replace it: terraform apply -replace=module.edge.aws_instance.edge"
+                exit 1
+              fi
+              echo "Edge host public IP: $ip"
+            fi
             rest=$(ids stopped)
             if [ -n "$rest" ]; then
               # shellcheck disable=SC2086

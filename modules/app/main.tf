@@ -152,7 +152,9 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 # What the application itself may use:
-#   - its own Parameter Store path (parameter_prefix), nothing else;
+#   - its own Parameter Store path (parameter_prefix), and the database
+#     users' passwords (database_users_parameter_path) when set, nothing else
+#     (not the database's root, backup or exporter passwords);
 #   - its attachments bucket (for example photos): list, read and write.
 #     Deleting is not allowed (the workload boundary does not allow it).
 data "aws_iam_policy_document" "app" {
@@ -160,6 +162,14 @@ data "aws_iam_policy_document" "app" {
     sid       = "ReadOwnParameters"
     actions   = ["ssm:GetParameter", "ssm:GetParameters"]
     resources = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${var.parameter_prefix}/*"]
+  }
+  dynamic "statement" {
+    for_each = var.database_users_parameter_path == null ? [] : [var.database_users_parameter_path]
+    content {
+      sid       = "ReadDatabaseUserPasswords"
+      actions   = ["ssm:GetParameter", "ssm:GetParameters"]
+      resources = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter${statement.value}/*"]
+    }
   }
   statement {
     sid       = "ListAttachments"

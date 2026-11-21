@@ -86,3 +86,14 @@ variable "parameter_prefix" {
     error_message = "parameter_prefix must start with / and not end with /, for example /bmc/dev/app."
   }
 }
+
+variable "database_users_parameter_path" {
+  description = "Parameter Store path of the service database users' passwords, for example /bmc/dev/database/users. Null: no database access."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.database_users_parameter_path == null || can(regex("^/[A-Za-z0-9_./-]+[^/]$", var.database_users_parameter_path))
+    error_message = "database_users_parameter_path must start with / and not end with /, for example /bmc/dev/database/users."
+  }
+}

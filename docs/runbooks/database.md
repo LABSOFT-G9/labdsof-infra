@@ -4,17 +4,26 @@ Applies to `dev` and `prod`; replace `<env>` and `<account>`. Commands assume ad
 
 ## Secrets
 
-Create them before the first `terraform apply` of an environment. The host fails to start MySQL if any is missing. Use generated passwords without single quotes.
+Create them before the first `terraform apply` of an environment. The host fails to start MySQL if any is missing. Use generated passwords of letters and digits only (no quotes, no `#`), and never print them:
 
 ```
+# MySQL's own users
 for p in root_password backup_password exporter_password; do
-  aws ssm put-parameter --type SecureString \
-    --name "/bmc/<env>/database/$p" \
-    --value "$(openssl rand -base64 30 | tr -d \"'/+=\")"
+  aws ssm put-parameter --type SecureString --name "/bmc/<env>/database/$p" \
+    --value "$(openssl rand -base64 96 | tr -dc 'A-Za-z0-9' | head -c 32)" --query Version
+done
+# one user per service database (the list is `databases` in terraform.tfvars)
+for db in issue dispatch notification keycloak; do
+  aws ssm put-parameter --type SecureString --name "/bmc/<env>/database/users/$db" \
+    --value "$(openssl rand -base64 96 | tr -dc 'A-Za-z0-9' | head -c 32)" --query Version
 done
 ```
 
-They are read at every boot into `/run/bmc` (memory only). The MySQL users `backup` and `exporter` are created from them on the **first** start, when the data volume is empty. To rotate a password later, change it in MySQL (`ALTER USER`) and in SSM, then restart `bmc-database.service`.
+They are read at every boot into `/run/bmc` (memory only).
+
+- `backup` and `exporter` are created on the **first** start, when the data volume is empty. To rotate one later, change it in MySQL (`ALTER USER`) and in SSM, then restart `bmc-database.service`.
+- The **service databases** (`issue`, `dispatch`, `notification`, `keycloak`) and their users are created or updated at **every** boot: each user has the database's name, its password from `/bmc/<env>/database/users/<name>`, and rights on its own database only. To rotate one, change it in SSM (`--overwrite`) and restart `bmc-database.service` (or reboot); then restart the service that uses it. To add a service, add its name to `databases` and create its password before the apply.
+- The application host may read `/bmc/<env>/database/users/*` only (not root, backup or exporter).
 
 ## Connect
 
