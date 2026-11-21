@@ -199,7 +199,8 @@ resource "aws_instance" "edge" {
     }
   }
 
-  tags = { Name = "${var.name}-edge" }
+  # Role: Ansible finds the host by it (ansible/inventory).
+  tags = { Name = "${var.name}-edge", Role = "edge" }
 }
 
 # The private subnet's way out.

@@ -1,0 +1,18 @@
+---
+# Grafana Alloy from its GitHub release (v1.21.3, 2026-10-28), checksum-
+# verified from the release's SHA256SUMS. HTTPS only, so it also installs on
+# hosts whose security group allows no plain HTTP (the database host).
+alloy_version: 1.21.3
+alloy_packages:
+  deb:
+    file: alloy-1.21.3-1.amd64.deb
+    sha256: dbbd705de8ab37dec0cbd6361a3fc7e754d6b2854b57ce672a83e6366199ba73
+  rpm:
+    file: alloy-1.21.3-1.amd64.rpm
+    sha256: 6c22d473950c5fdfb4b0b5df3a9d06107eb1022324ebcbd358c2d08c5981881c
+
+# Container metrics (cAdvisor) where Docker runs.
+alloy_docker_metrics: true
+# Extra local endpoints to scrape: [{name: mysql, address: 127.0.0.1:9104}]
+alloy_scrape_targets: []
+alloy_scrape_interval: 30s

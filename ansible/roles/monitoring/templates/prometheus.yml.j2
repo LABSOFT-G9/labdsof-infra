@@ -1,0 +1,11 @@
+# Managed by Ansible (ansible/roles/monitoring). The hosts' metrics arrive by
+# remote write from their agents; Prometheus only scrapes itself.
+global:
+  scrape_interval: 30s
+  external_labels:
+    environment: {{ bmc_environment }}
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

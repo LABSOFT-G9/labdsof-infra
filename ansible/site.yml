@@ -1,0 +1,28 @@
+---
+# Configures the running hosts of an environment over SSM Session Manager:
+#   ansible-playbook -i inventory/dev.aws_ec2.yml site.yml
+# The database host is built as an image (database-image.yml); here it only
+# gets the agent.
+- name: Docker on the application and monitoring hosts
+  hosts: app:monitoring
+  become: true
+  roles:
+    - docker
+
+- name: Application host
+  hosts: app
+  become: true
+  roles:
+    - app
+
+- name: Monitoring host (Prometheus and Grafana)
+  hosts: monitoring
+  become: true
+  roles:
+    - monitoring
+
+- name: Metrics agent on every host
+  hosts: all
+  become: true
+  roles:
+    - alloy

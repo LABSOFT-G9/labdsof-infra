@@ -1,0 +1,10 @@
+---
+# Collections for running the playbooks against the live hosts (inventory from
+# EC2 tags, connection over SSM Session Manager). Pinned; versions chosen on
+# 2026-11-21. Install: ansible-galaxy collection install -r requirements.yml
+# (needs boto3 and botocore in the same Python, and the Session Manager plugin).
+collections:
+  - name: amazon.aws
+    version: 12.1.0
+  - name: community.aws
+    version: 11.2.2

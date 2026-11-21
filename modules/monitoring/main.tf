@@ -1,7 +1,7 @@
-# Monitoring host for one environment: one plain EC2 instance in the private
-# subnet, with no software added yet (Prometheus, Loki and Grafana are added
-# case by case). Agents on the other hosts will push to it: metrics to 9090
-# (Prometheus remote write), logs to 3100 (Loki). It has no public IP; Grafana
+# Monitoring host for one environment: one EC2 instance in the private subnet
+# for Prometheus and Grafana (installed by Ansible, ansible/roles/monitoring).
+# The agents on every host push metrics to it on 9090 (Prometheus remote
+# write). It has no public IP; Grafana
 # will be reached through SSM Session Manager port forwarding. It reaches the
 # internet through the edge host's NAT.
 
@@ -25,7 +25,7 @@ data "aws_ami" "monitoring" {
 }
 
 locals {
-  push_ports = { metrics = 9090, logs = 3100 }
+  push_ports = { metrics = 9090 }
   # One rule per (sending host, port), keyed by the host's name (for example
   # "app-metrics"), so switching one host off does not touch the others' rules.
   push_rules = {
@@ -202,5 +202,6 @@ resource "aws_instance" "monitoring" {
     }
   }
 
-  tags = { Name = "${var.name}-monitoring" }
+  # Role: Ansible finds the host by it (ansible/inventory).
+  tags = { Name = "${var.name}-monitoring", Role = "monitoring" }
 }

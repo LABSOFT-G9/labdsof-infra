@@ -75,9 +75,9 @@ resource "aws_vpc_security_group_egress_rule" "https" {
   cidr_ipv4         = "0.0.0.0/0"
 }
 
-# Push metrics (9090) and logs (3100) to the monitoring host, when there is one.
+# Push metrics (9090) to the monitoring host, when there is one.
 resource "aws_vpc_security_group_egress_rule" "monitoring" {
-  for_each = var.monitoring_ip == null ? {} : { metrics = 9090, logs = 3100 }
+  for_each = var.monitoring_ip == null ? {} : { metrics = 9090 }
 
   security_group_id = aws_security_group.database.id
   description       = "Push ${each.key} to the monitoring host"
@@ -227,8 +227,10 @@ resource "aws_instance" "database" {
     }
   }
 
+  # Role: Ansible finds the host by it (ansible/inventory).
   tags = {
     Name       = "${var.name}-database"
+    Role       = "database"
     AmiVersion = var.ami_version
   }
 }

@@ -1,0 +1,42 @@
+---
+# Prometheus and Grafana on the monitoring host, as containers (docker role).
+
+- name: Create the monitoring directory
+  ansible.builtin.file:
+    path: "{{ monitoring_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the Compose file, Prometheus configuration and Grafana data source
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ monitoring_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - compose.yaml
+    - prometheus.yml
+    - grafana-datasources.yml
+  notify: Restart the monitoring stack
+
+# Read where Ansible runs (your AWS credentials), written on the host readable
+# by root only, never shown in the output.
+- name: Install Grafana's admin password
+  ansible.builtin.copy:
+    dest: "{{ monitoring_dir }}/grafana.env"
+    content: "GF_SECURITY_ADMIN_PASSWORD={{ lookup('amazon.aws.ssm_parameter', monitoring_grafana_password_parameter, region=ansible_aws_ssm_region) }}\n"
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+  notify: Restart the monitoring stack
+
+- name: Start Prometheus and Grafana
+  ansible.builtin.command: docker compose up -d
+  args:
+    chdir: "{{ monitoring_dir }}"
+  register: monitoring_up
+  changed_when: "'Started' in monitoring_up.stderr or 'Created' in monitoring_up.stderr"

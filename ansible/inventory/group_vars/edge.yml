@@ -1,0 +1,3 @@
+---
+# The edge host runs no containers: host metrics only.
+alloy_docker_metrics: false

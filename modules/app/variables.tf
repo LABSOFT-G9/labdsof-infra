@@ -72,7 +72,7 @@ variable "cpu_credits" {
 }
 
 variable "monitoring_ip" {
-  description = "Private IP of the monitoring host, to allow pushing metrics (9090) and logs (3100) to it. Null: no monitoring host."
+  description = "Private IP of the monitoring host, to allow pushing metrics (9090) to it. Null: no monitoring host."
   type        = string
   default     = null
 }

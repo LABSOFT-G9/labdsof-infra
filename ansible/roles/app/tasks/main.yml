@@ -1,0 +1,12 @@
+---
+# Application host: Docker and Compose (docker role) and the directory the
+# application's compose.yaml is deployed to (by the application repository's
+# deploy job). The application itself is not installed here.
+
+- name: Create the application directory
+  ansible.builtin.file:
+    path: /opt/bmc-app
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
