@@ -1,22 +1,24 @@
 name: CI
 
-# One workflow. Nothing is applied automatically: changing AWS is always a
-# person pressing the button.
+# One workflow. Nothing changes AWS without a person approving it.
 #
 #   pull request:            lint -> plan dev, plan prod
-#   main (after merge):      lint -> plan dev, plan prod
-#   Run workflow (button):   lint -> plan <environment> -> apply or destroy it
-#                            (Actions -> CI -> Run workflow, on main; choose
-#                            the environment and the action)
+#   main (after merge):      lint -> plan dev, plan prod -> apply dev -> apply prod
+#                            each apply waits for approval (Review deployments
+#                            on the run), and only runs if its plan has changes
+#   Run workflow (button):   lint -> plan <environment> -> apply or destroy it,
+#                            after approval (Actions -> CI -> Run workflow, on
+#                            main; choose the environment and the action). For
+#                            destroying, or re-applying without a new merge.
 #
-# lint   no AWS access: terraform fmt / validate / TFLint, packer fmt /
-#        validate, ansible-lint, ShellCheck
-# plan   the plan is shown in the job summary and saved (a destroy plan when
-#        the action is destroy)
-# apply  button only, on main, in the GitHub environment of the same name
-#        (`prod` waits for a reviewer, who can read the plan of this run
-#        first). It applies exactly the saved plan, and does nothing when the
-#        plan had no changes.
+# lint     no AWS access: terraform fmt / validate / TFLint, packer fmt /
+#          validate, ansible-lint, ShellCheck
+# plan     the plan is shown in the job summary and saved (a destroy plan when
+#          the action is destroy)
+# changes  lists the environments whose plan has changes, dev before prod
+# apply    one job per listed environment, in its GitHub environment (required
+#          reviewers: the run waits until someone approves). Applies exactly
+#          the saved plan. prod only after dev succeeded.
 #
 # AWS access: the access key of the IAM user bmc-ci (repository secrets), which
 # switches into the role bmc-admin. The AWS Organization denies GitHub OIDC.
@@ -174,51 +176,75 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  apply:
-    name: ${{ inputs.action }} ${{ inputs.environment }}
+  # Which environments have something to apply, dev first. An environment
+  # without changes gets no apply job, so nobody is asked to approve nothing.
+  changes:
+    name: Changes
     needs: plan
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      envs: ${{ steps.list.outputs.envs }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: tfplan-*
+          path: plans
+      - name: List environments with changes
+        id: list
+        run: |
+          envs=()
+          for env in dev prod; do
+            file="plans/tfplan-$env/changes"
+            if [ -f "$file" ] && [ "$(cat "$file")" = true ]; then
+              envs+=("\"$env\"")
+            fi
+          done
+          list="[$(IFS=,; echo "${envs[*]}")]"
+          echo "envs=$list" >>"$GITHUB_OUTPUT"
+          echo "Environments to apply: $list" >>"$GITHUB_STEP_SUMMARY"
+
+  apply:
+    name: ${{ inputs.action || 'apply' }} ${{ matrix.env }}
+    needs: changes
+    if: needs.changes.outputs.envs != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # `prod` has required reviewers. The plan (or destroy plan) was saved by
-    # the plan job of this run; the reviewer can read it in the run summary.
-    environment: ${{ inputs.environment }}
+    # The GitHub environment has required reviewers: the job waits for an
+    # approval (Review deployments). The reviewer can read this run's plan in
+    # its summary first.
+    environment: ${{ matrix.env }}
+    strategy:
+      max-parallel: 1 # dev, then prod
+      fail-fast: true # dev failed -> prod does not run
+      matrix:
+        env: ${{ fromJSON(needs.changes.outputs.envs) }}
     defaults:
       run:
-        working-directory: environments/${{ inputs.environment }}
+        working-directory: environments/${{ matrix.env }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: tfplan-${{ inputs.environment }}
-          path: environments/${{ inputs.environment }}
-
-      - name: Anything to apply?
-        id: check
-        run: |
-          changes=$(cat changes)
-          echo "changes=$changes" >>"$GITHUB_OUTPUT"
-          [ "$changes" = true ] || echo "The plan has no changes; nothing to apply."
-
+          name: tfplan-${{ matrix.env }}
+          path: environments/${{ matrix.env }}
       - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
-        if: steps.check.outputs.changes == 'true'
         with:
           aws-region: ${{ vars.AWS_REGION }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           role-duration-seconds: 3600
-          role-session-name: gh-${{ inputs.action }}-${{ inputs.environment }}-${{ github.run_id }}
+          role-session-name: gh-${{ inputs.action || 'apply' }}-${{ matrix.env }}-${{ github.run_id }}
       - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
-        if: steps.check.outputs.changes == 'true'
         with:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
       - name: Init
-        if: steps.check.outputs.changes == 'true'
         env:
           STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
         run: terraform init -lock-timeout=5m -backend-config="bucket=${STATE_BUCKET}"
@@ -228,7 +254,6 @@ jobs:
       # is changed. A destroy removes the environment's buckets with the
       # attachments and backups; the state file stays (empty).
       - name: Apply
-        if: steps.check.outputs.changes == 'true'
         run: terraform apply -lock-timeout=5m tfplan
 
   # The single check to require on main (lint and the plans).

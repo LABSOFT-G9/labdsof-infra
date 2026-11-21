@@ -75,9 +75,9 @@ S3 gateway endpoint on both route tables (free)
 
 ## Lifecycle: create, test, destroy
 
-1. **Create**: merge to `main` (CI only plans), then press the button: Actions → CI → Run workflow on `main`, environment `dev` or `prod`, action `apply`. `prod` waits for approval.
+1. **Create**: merge to `main`. The run plans dev and prod, then each environment whose plan has changes waits for approval: open the run, read the plan in its summary, **Review deployments** → approve. dev applies first, prod only after dev succeeded. To apply without a new merge, use the button: Actions → CI → Run workflow on `main`, environment, action `apply`.
 2. **Test**: runbook checks (Session Manager, MySQL up, a manual backup lands in S3, a restore).
-3. **Destroy**: the same button with action `destroy`. It shows the destroy plan in the summary and removes everything in that environment, including the attachments and backups buckets. `prod` waits for approval.
+3. **Destroy**: the button with action `destroy`. It shows the destroy plan in the summary and removes everything in that environment, including the attachments and backups buckets. `prod` waits for approval.
 4. **Clean up what Terraform does not own** (costs cents, but adds up):
    - old AMIs: deregister them and delete their snapshots (EC2 → AMIs, EC2 → Snapshots);
    - SSM parameters `/bmc/<env>/database/*` (free; delete if the environment will not come back).
@@ -149,14 +149,15 @@ Terraform ≥ 1.10, AWS provider 6.x, Packer ≥ 1.11. CI uses Terraform 1.17.2 
 | Trigger | Lint | Plan | Apply |
 |---|---|---|---|
 | Pull request (any branch into `main`) | ✓ | dev and prod | – |
-| Merge to `main` | ✓ | dev and prod | – |
-| **Run workflow** button on `main` (environment, action) | ✓ | the chosen environment (a destroy plan for `destroy`) | apply or destroy it, if the plan has changes; `prod` **after approval** |
+| **Merge to `main`** | ✓ | dev and prod | each environment **with changes**, after **approval**: dev first, prod only after dev succeeded |
+| **Run workflow** button on `main` (environment, action) | ✓ | the chosen environment (a destroy plan for `destroy`) | apply or destroy it, if the plan has changes, after **approval** |
 
-Everything is in one workflow, `.github/workflows/ci.yml`. Nothing changes in AWS until someone presses the button: Actions → CI → **Run workflow**, branch `main`, choose the environment (`dev` or `prod`) and the action (`apply` or `destroy`). The run plans first and shows the plan in its summary, then applies exactly that plan.
+Everything is in one workflow, `.github/workflows/ci.yml`. Nothing changes in AWS without an approval: the apply job waits in the run with **Review deployments**, and the plan it will apply is in the run's summary. An environment whose plan has no changes gets no apply job and asks for nothing. The button is for destroying, or for applying without a new merge.
 
 - **Lint** (no AWS access): `terraform fmt`, `terraform validate` and TFLint for `environments/dev`, `environments/prod` and `bootstrap`; `packer fmt` and `packer validate`; `ansible-lint` (26.11.0, with ansible-core 2.21.6); ShellCheck.
 - **Plan** (job `plan`, one per environment, role `bmc-admin`): the plan is shown in the job summary and saved as an artifact for one day.
-- **Apply** (job `apply`, button only, on `main`, in the GitHub environment of the same name, role `bmc-admin`): applies exactly the plan saved earlier in the same run; if the state changed in between, Terraform refuses and nothing changes. The `prod` approval is asked even when the prod plan has no changes (the job then ends without touching AWS), because a GitHub environment gates a whole job.
+- **Changes** (job `changes`, on `main`): lists the environments whose plan has changes, dev before prod.
+- **Apply** (job `apply`, one per listed environment, in the GitHub environment of the same name, role `bmc-admin`): waits for a required reviewer, then applies exactly the plan saved earlier in the same run; if the state changed in between, Terraform refuses and nothing changes. prod runs only after dev succeeded.
 - Pull requests from forks stop after lint (GitHub gives them no secrets).
 - `ci-required` (lint and the plans) is the single check to require on `main`.
 - The bootstrap configuration is never applied by CI.
