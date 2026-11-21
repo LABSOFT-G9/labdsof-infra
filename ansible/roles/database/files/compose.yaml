@@ -11,6 +11,10 @@ services:
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD_FILE: /run/bmc/root_password
+      # root only from inside the host (the image's default is root@'%').
+      # Applies to a new data directory; bootstrap.sh removes root@'%' from
+      # existing ones.
+      MYSQL_ROOT_HOST: localhost
     ports:
       - "3306:3306"
     volumes:
