@@ -19,7 +19,7 @@ monitoring_enabled       = true
 monitoring_instance_type = "t3.small"
 # al2023-ami-2023.12.20261120.0-kernel-6.18-x86_64 (Amazon, built 2026-11-20)
 monitoring_ami_id      = "ami-083dedce92603a2ad"
-database_enabled       = false
+database_enabled       = true
 database_ami_version   = "*"
 database_instance_type = "t3.micro"
 database_volume_size   = 10

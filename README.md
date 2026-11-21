@@ -34,7 +34,7 @@ Each environment has its own state file (`<env>/terraform.tfstate` in the state 
 | Setting | dev | prod |
 |---|---|---|
 | VPC | `10.10.0.0/16` | `10.20.0.0/16` |
-| Database host | off for now (`database_enabled = false`) | off for now |
+| Database host | on (`database_enabled = true`), image `bmc-database-1.0.0` | off for now |
 | Database AMI | newest build (`"*"`) | pinned version (`1.0.0`), changed only by a PR |
 | Database instance | `t3.micro` | `t3.small` |
 | Data volume | 10 GiB | 10 GiB |
@@ -60,7 +60,7 @@ dev VPC 10.10.0.0/16, one availability zone (eu-north-1a)
      │                    nothing installed yet
      ├─ Monitoring host   t3.small, 10.10.1.20, no public IP; plain server,
      │                    nothing installed yet (Prometheus, Loki, Grafana later)
-     └─ Database host     module ready, off (database_enabled = false)
+     └─ Database host     t3.micro, 10.10.1.30, from bmc-database-1.0.0
 S3 gateway endpoint on both route tables (free)
 ```
 
