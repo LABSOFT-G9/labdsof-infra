@@ -53,10 +53,10 @@ Prod gets the same layout once dev is settled. Software on the hosts is added ca
 ```
 dev VPC 10.10.0.0/16, one availability zone (eu-north-1a)
 ├─ Public subnet  10.10.0.0/24  route 0.0.0.0/0 -> internet gateway
-│    └─ Edge host  t3.nano, Elastic IP. NAT for the private subnet;
+│    └─ Edge host  t3.micro, Elastic IP. NAT for the private subnet;
 │                  forwards TCP 80/443 to the application host
 └─ Private subnet 10.10.1.0/24  route 0.0.0.0/0 -> edge host
-     ├─ Application host  t3.large, 10.10.1.10, no public IP; plain server,
+     ├─ Application host  m7i-flex.large (8 GiB), 10.10.1.10, no public IP; plain server,
      │                    nothing installed yet
      ├─ Monitoring host   t3.small, 10.10.1.20, no public IP; plain server,
      │                    nothing installed yet (Prometheus, Loki, Grafana later)
@@ -70,6 +70,7 @@ S3 gateway endpoint on both route tables (free)
 - The edge host runs only the NAT and forwarding rules (nftables, `modules/edge/user-data.sh.tftpl`); no application code, no secrets.
 - Edge, application and monitoring hosts: Amazon Linux 2023 (x86_64, image pinned in `terraform.tfvars`), IMDSv2 only, encrypted disks, administered through SSM Session Manager; no SSH port.
 - The VPC's default security group has no rules, so anything launched without a security group has no network access.
+- The account is on the AWS Free plan: only free-tier eligible instance types launch (eu-north-1: `t3.micro`, `t3.small`, `c7i-flex.large`, `m7i-flex.large`, `t4g.micro`, `t4g.small`); any other type fails at apply with `InvalidParameterCombination`.
 - The account's default VPC in eu-north-1 (`172.31.0.0/16`, public subnets that hand out public IPs) was deleted on 2026-11-21, outside Terraform, so nothing can be launched there by accident. `aws ec2 create-default-vpc` recreates it if ever needed.
 
 ## Lifecycle: create, test, destroy
