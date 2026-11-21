@@ -75,15 +75,25 @@ S3 gateway endpoint on both route tables (free)
 
 ## Configuring the hosts (Ansible)
 
-`ansible/site.yml` configures the running hosts of dev over SSM Session Manager (no SSH): Docker and Compose on the application and monitoring hosts, `/opt/bmc-app` for the application's Compose file, Prometheus and Grafana on the monitoring host, and the Alloy agent on every host (host metrics, container metrics where Docker runs, MySQL metrics on the database host). Hosts are found by their `Role` tag; files travel through the `bmc-dev-ansible-<account>` bucket with presigned URLs.
+`ansible/site.yml` configures the running hosts of dev: Docker and Compose on the application and monitoring hosts, `/opt/bmc-app` for the application's Compose file, Prometheus and Grafana on the monitoring host, and the Alloy agent on every host (host metrics, container metrics where Docker runs, MySQL metrics on the database host). Hosts are found by their `Role` tag.
 
-Needs, where you run it: AWS credentials, `ansible-core` 2.21 with `boto3` and `botocore`, the Session Manager plugin, and the collections:
+**How Ansible reaches the hosts: SSH tunnelled through Session Manager.** No port is open and no key stays on the hosts: `ansible/ssm-ssh-proxy.sh` pushes your public key to the host with EC2 Instance Connect (valid 60 seconds, enough to log in), then opens a Session Manager tunnel to its SSH port. Access is decided by your AWS login.
+
+Needs, where you run it: AWS credentials, the Session Manager plugin, `ansible-core` 2.21 with `boto3` and `botocore`, and an SSH key that stays on your machine:
 
 ```
+ssh-keygen -t ed25519 -f ~/.ssh/bmc_dev        # once; or point BMC_SSH_KEY at another key
 cd ansible
 ansible-galaxy collection install -r requirements.yml
 ansible-inventory -i inventory/dev.aws_ec2.yml --graph     # edge, app, monitoring, database
-ansible-playbook  -i inventory/dev.aws_ec2.yml site.yml
+ansible all -i inventory/dev.aws_ec2.yml -m ping
+ansible-playbook -i inventory/dev.aws_ec2.yml site.yml
+```
+
+The same works for a plain shell (`ec2-user` on Amazon Linux, `ubuntu` on the database host):
+
+```
+ssh -i ~/.ssh/bmc_dev -o ProxyCommand="ansible/ssm-ssh-proxy.sh %h %r %p" ec2-user@<instance id>
 ```
 
 ### Grafana

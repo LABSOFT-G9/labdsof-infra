@@ -1,4 +1,7 @@
 ---
+# Ubuntu image (ami/database): its user is ubuntu, not ec2-user.
+ansible_user: ubuntu
+
 # mysqld_exporter runs on the database host (published on port 9104).
 alloy_scrape_targets:
   - name: mysql

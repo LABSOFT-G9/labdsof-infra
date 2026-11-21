@@ -2,7 +2,6 @@
 # - attachments: files uploaded with issues (ADR-010), read and written by the app host
 # - backups: nightly mysqldump files, written by the database host only
 # Both are private, encrypted, versioned and blocked from public access.
-# - ansible: short-lived file transfers for Ansible over Session Manager (below)
 
 data "aws_caller_identity" "current" {}
 
@@ -155,57 +154,4 @@ resource "aws_s3_bucket_policy" "this" {
   policy = data.aws_iam_policy_document.tls_only[each.key].json
 
   depends_on = [aws_s3_bucket_public_access_block.this]
-}
-
-# Transfer bucket for Ansible over SSM Session Manager (the community.aws
-# aws_ssm connection): Ansible copies files to and from the hosts through it,
-# using short-lived presigned URLs created by whoever runs Ansible, so the
-# hosts need no permission on it. Files are only needed for seconds: no
-# versioning, deleted after a day.
-resource "aws_s3_bucket" "ansible" {
-  bucket        = "${var.name}-ansible-${data.aws_caller_identity.current.account_id}"
-  force_destroy = true
-
-  tags = { Name = "${var.name}-ansible-${data.aws_caller_identity.current.account_id}", Purpose = "ansible" }
-}
-
-resource "aws_s3_bucket_public_access_block" "ansible" {
-  bucket                  = aws_s3_bucket.ansible.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_ownership_controls" "ansible" {
-  bucket = aws_s3_bucket.ansible.id
-  rule {
-    object_ownership = "BucketOwnerEnforced"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "ansible" {
-  bucket = aws_s3_bucket.ansible.id
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-  }
-}
-
-resource "aws_s3_bucket_lifecycle_configuration" "ansible" {
-  bucket = aws_s3_bucket.ansible.id
-
-  rule {
-    id     = "expire-transfers"
-    status = "Enabled"
-    filter {}
-
-    expiration {
-      days = 1
-    }
-    abort_incomplete_multipart_upload {
-      days_after_initiation = 1
-    }
-  }
 }

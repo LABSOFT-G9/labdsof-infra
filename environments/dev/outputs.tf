@@ -51,8 +51,3 @@ output "monitoring_instance_id" {
   description = "For SSM Session Manager (and port forwarding to Grafana): aws ssm start-session --target <id>"
   value       = one(module.monitoring[*].instance_id)
 }
-
-output "ansible_bucket" {
-  description = "Transfer bucket for Ansible over Session Manager."
-  value       = module.storage.ansible_bucket
-}
