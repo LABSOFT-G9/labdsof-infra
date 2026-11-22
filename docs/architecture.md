@@ -61,12 +61,21 @@ Manual actions (Run workflow): apply, destroy, stop, start.
 
 ![Observability](diagrams/observability.png)
 
+| Host | What its Alloy agent collects |
+|---|---|
+| Edge | System metrics (CPU, memory, disk, network) and the system journal. No Docker here |
+| App | System + container metrics and logs |
+| Database | System + container metrics and logs, plus MySQL metrics (reads `/run/bmc/alloy-mysql.dsn`) |
+| Monitoring | System + container metrics and logs of Prometheus, Loki and Grafana themselves |
+
 | Step | What happens |
 |---|---|
-| 1 | Grafana Alloy on every host pushes metrics to Prometheus (port 9090), including MySQL metrics. Kept 7 days. |
-| 2 | Alloy pushes system and Docker logs to Loki (port 3100). Kept 7 days. |
+| 1 | Every agent pushes metrics to Prometheus (remote write, port 9090). Kept 7 days. |
+| 2 | Every agent pushes logs to Loki (port 3100). Kept 7 days. Docker logs on the hosts rotate at 3 × 10 MB. |
 | 3 | Grafana reads both. |
-| 4 | Grafana is not public: open it with SSM port forwarding to `localhost:3000`. Password: `/bmc/dev/monitoring/grafana_admin_password`. |
+| 4 | Grafana listens only on the monitoring host itself (`127.0.0.1:3000`): open it with SSM port forwarding, then browse to `localhost:3000`. Password: `/bmc/dev/monitoring/grafana_admin_password`. |
+
+Each line is labelled with `host`, `role` and `environment`, so Grafana can filter by host. The monitoring host's security group accepts 9090 and 3100 only from the edge, app and database hosts.
 
 ## 5. Administration
 
