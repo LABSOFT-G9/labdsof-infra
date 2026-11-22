@@ -24,6 +24,8 @@ environments/
 bootstrap/               one-time: the S3 bucket for Terraform state, the CI user and the bmc-admin role
 ami/database/            Packer template: builds the database image in dev's private subnet, configured by Ansible
 ansible/                 Ansible: database-image.yml (image build), site.yml (running hosts over Session Manager); roles base, docker, docker_logs, database, app, monitoring, alloy
+docs/architecture.md     diagrams of the infrastructure and its flows
+docs/diagrams/           the diagram images and the script that draws them
 docs/runbooks/           operating procedures
 ```
 
