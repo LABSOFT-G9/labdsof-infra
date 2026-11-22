@@ -21,10 +21,12 @@ Source of the images: [`diagrams/generate.py`](diagrams/generate.py) places ever
 | 2 | The edge forwards ports 80/443 to Traefik on the app host, which routes to the services. |
 | 3 | The services use MySQL on the database host (one database and user per service). |
 | 4 | Private hosts reach the internet (image pulls, updates) only through the edge host's NAT. Nothing from the internet can reach them. |
-| 5 | S3 traffic goes through the VPC gateway endpoint, not the internet: database backups to the backups bucket, attachments for the app. |
-| 6 | Secrets live in Parameter Store, and each host may read only what it needs: the database host its own path, the app host the service database passwords (`/bmc/dev/database/users/*`), the monitoring host Grafana's password. |
+| 5 | Files users upload (for example photos) go from the services to the **attachments** bucket. The app host may only list, read and write that bucket. |
+| 6 | The database host streams its MySQL dumps to the **backups** bucket. It may only add objects there; old backups expire by the bucket's lifecycle rule. |
+| 7 | Secrets live in Parameter Store, and each host may read only what it needs: the database host its own path, the app host the service database passwords (`/bmc/dev/database/users/*`), the monitoring host Grafana's password. |
+| 8 | A Grafana Alloy agent on every host pushes metrics to Prometheus (:9090) and logs to Loki (:3100) on the monitoring host; Grafana reads both. The monitoring host runs its own Alloy too (not drawn). Details in §4. |
 
-Metrics and logs from every host go to the monitoring host (§4). The only way into a host is Systems Manager; no SSH port is open anywhere (§5).
+S3 traffic (5, 6) goes through the VPC's S3 gateway endpoint, not the internet. The only way into a host is Systems Manager; no SSH port is open anywhere (§5).
 
 ## 2. Infrastructure changes (this repository)
 
