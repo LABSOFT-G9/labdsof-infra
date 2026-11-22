@@ -1,8 +1,6 @@
 # Architecture
 
-How BMC runs on AWS (dev; prod will copy it). The diagrams show icons and step numbers only; each number is explained in the table under its diagram. Arrows and numbers of one step share a colour.
-
-**How to read the boxes:** dark outline = the AWS account (eu-north-1, one zone, eu-north-1a) · green = the VPC (`10.10.0.0/16`) · light green = public subnet · light blue = private subnet · dashed orange = one EC2 host and what runs on it · grey dashed = outside AWS (GitHub).
+How BMC runs on AWS (dev; prod will copy it). Each diagram is titled and every icon, group and arrow is named; the numbered arrows are explained in the table under the diagram. A number and its arrow share a colour; grey lines only connect things on the same path.
 
 Source of the images: [`diagrams/generate.py`](diagrams/generate.py) (Python `diagrams`). Change the script, not the PNGs.
 

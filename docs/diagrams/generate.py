@@ -1,7 +1,8 @@
 """Draws the architecture diagrams in docs/diagrams (docs/architecture.md).
 
-The images carry icons and step numbers only; every explanation is in the
-Markdown next to them. Regenerate after an infrastructure change:
+Every diagram has a title, every icon and group a name, and every arrow a
+step number with a short label; the tables in architecture.md explain each
+step. Regenerate after an infrastructure change:
 
     python3 -m venv .venv && .venv/bin/pip install diagrams==0.24.4
     (needs Graphviz: apt install graphviz)
@@ -12,15 +13,14 @@ from diagrams import Cluster, Diagram, Edge
 from diagrams.aws.compute import EC2Ami, EC2Instance
 from diagrams.aws.general import InternetAlt1, User, Users
 from diagrams.aws.management import (
+    SystemsManager,
     SystemsManagerParameterStore,
     SystemsManagerRunCommand,
-    SystemsManager,
 )
 from diagrams.aws.network import Endpoint, InternetGateway
 from diagrams.aws.security import (
     IdentityAndAccessManagementIamAWSSts,
     IdentityAndAccessManagementIamLongTermSecurityCredential,
-    IdentityAndAccessManagementIamPermissions,
     IdentityAndAccessManagementIamRole,
     IdentityAndAccessManagementIamTemporarySecurityCredential,
 )
@@ -34,205 +34,218 @@ from diagrams.onprem.monitoring import Grafana, Prometheus
 from diagrams.onprem.network import Traefik
 from diagrams.onprem.vcs import Github
 
-# Group colours follow the AWS architecture icon guide: cloud, VPC, public
-# and private subnet. No group has a title; the Markdown names them.
-AWS = {"bgcolor": "#FFFFFF", "pencolor": "#232F3E", "penwidth": "2", "style": "rounded"}
-VPC = {"bgcolor": "#F2F8EE", "pencolor": "#7AA116", "penwidth": "2", "style": "rounded"}
-PUBLIC = {"bgcolor": "#E9F3E6", "pencolor": "#7AA116", "style": "rounded"}
-PRIVATE = {"bgcolor": "#E6F2F8", "pencolor": "#00A4A6", "style": "rounded"}
-HOST = {"bgcolor": "#FFFFFF", "pencolor": "#ED7100", "style": "dashed,rounded"}
-EXTERNAL = {"bgcolor": "#F5F5F5", "pencolor": "#999999", "style": "dashed,rounded"}
+# Group colours follow the AWS architecture icon guide.
+FONT = {"fontname": "Helvetica", "fontsize": "15", "labeljust": "l"}
+AWS = {**FONT, "bgcolor": "#FFFFFF", "pencolor": "#232F3E", "penwidth": "2", "style": "rounded"}
+VPC = {**FONT, "bgcolor": "#F7FBF2", "pencolor": "#7AA116", "penwidth": "2", "style": "rounded"}
+PUBLIC = {**FONT, "bgcolor": "#E9F3E6", "pencolor": "#7AA116", "style": "rounded"}
+PRIVATE = {**FONT, "bgcolor": "#E6F2F8", "pencolor": "#00A4A6", "style": "rounded"}
+HOST = {**FONT, "bgcolor": "#FFFFFF", "pencolor": "#ED7100", "style": "dashed,rounded"}
+GITHUB = {**FONT, "bgcolor": "#F5F5F5", "pencolor": "#6E7781", "style": "dashed,rounded"}
 
-GRAPH = {"splines": "spline", "pad": "0.4", "nodesep": "0.7", "ranksep": "1.0", "fontsize": "1", "label": ""}
-NODE = {"fontsize": "1", "labelloc": "b", "height": "1.2"}
+GRAPH = {"fontname": "Helvetica-Bold", "fontsize": "26", "labelloc": "t",
+         "pad": "0.5", "nodesep": "0.8", "ranksep": "1.1", "splines": "spline"}
+NODE = {"fontname": "Helvetica", "fontsize": "13"}
 
-
-# One colour per step number, so each number visibly belongs to its arrow.
+# One colour per step, so a number and its arrow clearly belong together.
 STEP_COLOURS = ["#D13212", "#1F6FEB", "#2DA44E", "#8250DF", "#BF8700",
                 "#E36209", "#0E8A8A", "#C2185B"]
 
 
-def step(number, **attrs):
-    """An arrow whose only text is its step number, both in the step's colour."""
+def step(number, text, **attrs):
+    """An arrow labelled '<number>. <text>' in the step's colour."""
     colour = STEP_COLOURS[(number - 1) % len(STEP_COLOURS)]
-    return Edge(label=f" {number} ", fontsize="20", fontcolor=colour, color=colour,
-                penwidth="2.2", **attrs)
+    return Edge(label=f"{number}. {text}", fontname="Helvetica-Bold", fontsize="13",
+                fontcolor=colour, color=colour, penwidth="2.2", **attrs)
 
 
-def diagram(filename, direction="LR"):
-    return Diagram("", filename=filename, show=False, direction=direction,
+def line():
+    """A plain connector (same host, or the continuation of a step)."""
+    return Edge(color="#8C8C8C", penwidth="1.2")
+
+
+def diagram(title, filename, direction="LR"):
+    return Diagram(title, filename=filename, show=False, direction=direction,
                    graph_attr=GRAPH, node_attr=NODE, outformat="png")
 
 
-_groups = 0
+def group(title, attrs):
+    return Cluster(title, graph_attr=attrs)
 
 
-def group(attrs):
-    """A titleless group. Graphviz merges clusters with the same name, so each
-    gets a different number of spaces as its (invisible) name."""
-    global _groups
-    _groups += 1
-    return Cluster(" " * _groups, graph_attr=attrs)
+# 1. Overview ------------------------------------------------------------------
+with diagram("BMC on AWS: dev environment", "overview"):
+    users = Users("Users\n(browser)")
+    ghcr = InternetAlt1("Internet\n(GHCR, updates)")
+
+    with group("AWS account · eu-north-1", AWS):
+        with group("Regional services", AWS):
+            ssm = SystemsManager("Systems Manager\n(admin access)")
+            params = SystemsManagerParameterStore("Parameter Store\n(secrets)")
+            s3 = SimpleStorageServiceS3Bucket("S3\n(backups, attachments)")
+
+        with group("VPC bmc-dev · 10.10.0.0/16 · eu-north-1a", VPC):
+            igw = InternetGateway("Internet\ngateway")
+            s3_endpoint = Endpoint("S3 gateway\nendpoint")
+
+            with group("Public subnet · 10.10.0.0/24", PUBLIC):
+                edge = EC2Instance("Edge host\nNAT + port forward")
+
+            with group("Private subnet · 10.10.1.0/24", PRIVATE):
+                with group("App host · 10.10.1.10", HOST):
+                    traefik = Traefik("Traefik")
+                    services = Docker("Services\n(client, issue,\ndispatch, …)")
+                with group("Database host · 10.10.1.30", HOST):
+                    mysql = Mysql("MySQL 8.4")
+                    volume = ElasticBlockStoreEBSVolume("Data volume\n(EBS)")
+                with group("Monitoring host · 10.10.1.20", HOST):
+                    prometheus = Prometheus("Prometheus\n+ Loki")
+                    grafana = Grafana("Grafana")
+
+    users >> step(1, "HTTP 80/443") >> igw >> line() >> edge
+    edge >> step(2, "forward") >> traefik >> line() >> services
+    services >> step(3, "SQL 3306") >> mysql
+    mysql - line() - volume
+    [services, mysql] >> step(4, "metrics + logs") >> prometheus
+    prometheus - line() - grafana
+    services >> step(5, "outbound via NAT", style="dashed") >> edge
+    igw >> Edge(color="#8C8C8C", style="dashed") >> ghcr
+    mysql >> step(6, "backups", style="dashed") >> s3_endpoint >> line() >> s3
+    services >> step(7, "read secrets", style="dotted") >> params
+    ssm >> step(8, "sessions, Run Command", style="dotted") >> services
 
 
-# 1. Overview: where everything runs and how a request flows. One arrow per
-# kind of traffic; the Markdown says which hosts each applies to.
-with diagram("overview"):
-    users = Users("")
-    internet = InternetAlt1("")
-    with group(AWS):
-        ssm = SystemsManager("")
-        params = SystemsManagerParameterStore("")
-        s3 = SimpleStorageServiceS3Bucket("")
-        with group(VPC):
-            igw = InternetGateway("")
-            endpoint = Endpoint("")
-            with group(PUBLIC):
-                edge = EC2Instance("")
-            with group(PRIVATE):
-                with group(HOST):
-                    traefik = Traefik("")
-                    services = Docker("")
-                with group(HOST):
-                    mysql = Mysql("")
-                    volume = ElasticBlockStoreEBSVolume("")
-                with group(HOST):
-                    prometheus = Prometheus("")
-                    grafana = Grafana("")
+# 2. Infrastructure pipeline ---------------------------------------------------
+with diagram("Infrastructure changes: merge → plan → approve → apply", "infra-pipeline"):
+    developer = User("Developer")
+    approver = User("Maintainer\n(approver)")
 
-    users >> step(1) >> igw >> edge
-    edge >> step(2) >> traefik >> services
-    services >> step(3) >> mysql
-    mysql - volume
-    [services, mysql] >> step(4) >> prometheus
-    prometheus - grafana
-    services >> step(5, style="dashed") >> edge
-    igw >> Edge(style="dashed") >> internet
-    mysql >> step(6, style="dashed") >> endpoint >> s3
-    services >> step(7, style="dotted") >> params
-    ssm >> step(8, style="dotted") >> services
+    with group("GitHub · labdsof-infra", GITHUB):
+        repo = Github("main branch")
+        actions = GithubActions("CI workflow\nlint · plan · apply")
+        key = IdentityAndAccessManagementIamLongTermSecurityCredential("bmc-ci\naccess key")
+    terraform = Terraform("Terraform")
+
+    with group("AWS account · eu-north-1", AWS):
+        sts = IdentityAndAccessManagementIamAWSSts("STS\nAssumeRole")
+        role = IdentityAndAccessManagementIamRole("bmc-admin role\n(permissions boundary)")
+        state = SimpleStorageServiceS3Bucket("Terraform state\n(S3)")
+        with group("VPC bmc-dev", VPC):
+            hosts = EC2Instance("Network, hosts,\nIAM, buckets")
+
+    developer >> step(1, "merge PR") >> repo
+    repo >> step(2, "trigger") >> actions
+    actions >> step(3, "plan dev + prod") >> terraform
+    terraform >> line() >> state
+    approver >> step(4, "Review deployments") >> actions
+    actions >> line() >> key
+    key >> step(5, "assume role") >> sts >> line() >> role
+    role >> step(6, "apply") >> terraform
+    terraform >> step(7, "create / change") >> hosts
 
 
-# 2. Infrastructure pipeline: merge -> plan -> approval -> apply.
-with diagram("infra-pipeline"):
-    dev = User("")
-    approver = User("")
-    with group(EXTERNAL):
-        repo = Github("")
-        actions = GithubActions("")
-        key = IdentityAndAccessManagementIamLongTermSecurityCredential("")
-    with group(AWS):
-        sts = IdentityAndAccessManagementIamAWSSts("")
-        role = IdentityAndAccessManagementIamRole("")
-        boundary = IdentityAndAccessManagementIamPermissions("")
-        state = SimpleStorageServiceS3Bucket("")
-        with group(VPC):
-            hosts = EC2Instance("")
-    tf = Terraform("")
+# 3. Application deploy --------------------------------------------------------
+with diagram("Application deploy to dev", "app-deploy"):
+    developer = User("Developer")
 
-    dev >> step(1) >> repo >> step(2) >> actions
-    actions >> step(3) >> tf >> state
-    approver >> step(4) >> actions
-    actions - key
-    key >> step(5) >> sts >> role
-    role - boundary
-    role >> step(6) >> tf
-    tf >> step(7) >> hosts
+    with group("GitHub · LABDSOF_G9A", GITHUB):
+        repo = Github("main branch")
+        actions = GithubActions("dev.yml + deploy.yml")
+        registry = Docker("GHCR\nlabdsof-<service>")
+        key = IdentityAndAccessManagementIamLongTermSecurityCredential("bmc-deploy-dev\naccess key")
+        zap = GithubActions("ZAP scan")
 
+    with group("AWS account · eu-north-1", AWS):
+        run_command = SystemsManagerRunCommand("SSM Run Command")
+        params = SystemsManagerParameterStore("Parameter Store\n(DB passwords)")
+        with group("VPC bmc-dev", VPC):
+            with group("Public subnet", PUBLIC):
+                edge = EC2Instance("Edge host")
+            with group("Private subnet", PRIVATE):
+                with group("App host", HOST):
+                    deploy = EC2Instance("bmc-app-deploy")
+                    traefik = Traefik("Traefik +\nservices")
 
-# 3. Application deploy: merge in the app repository -> dev.
-with diagram("app-deploy"):
-    dev = User("")
-    scanner = User("")
-    with group(EXTERNAL):
-        repo = Github("")
-        actions = GithubActions("")
-        registry = Docker("")
-        key = IdentityAndAccessManagementIamLongTermSecurityCredential("")
-    with group(AWS):
-        run = SystemsManagerRunCommand("")
-        params = SystemsManagerParameterStore("")
-        with group(VPC):
-            with group(PUBLIC):
-                edge = EC2Instance("")
-            with group(PRIVATE):
-                with group(HOST):
-                    app = EC2Instance("")
-                    traefik = Traefik("")
-
-    dev >> step(1) >> repo >> actions
-    actions >> step(2) >> registry
-    actions - key
-    key >> step(3) >> run >> step(4) >> app
-    app >> step(5) >> params
-    app >> step(6, style="dashed") >> edge >> registry
-    actions >> step(7) >> scanner >> edge >> traefik
+    developer >> step(1, "merge PR") >> repo >> line() >> actions
+    actions >> step(2, "build · scan · sign · push") >> registry
+    actions >> line() >> key
+    key >> step(3, "send command") >> run_command
+    run_command >> step(4, "run deploy <tag>") >> deploy
+    deploy >> step(5, "read passwords") >> params
+    deploy >> step(6, "pull images (via NAT)", style="dashed") >> edge >> line() >> registry
+    deploy >> line() >> traefik
+    actions >> line() >> zap
+    zap >> step(7, "DAST scan") >> edge >> line() >> traefik
 
 
-# 4. Metrics and logs.
-with diagram("observability"):
-    admin = User("")
-    with group(AWS):
-        ssm = SystemsManager("")
-        with group(VPC):
-            with group(PUBLIC):
-                edge = EC2Instance("")
-            with group(PRIVATE):
-                app = EC2Instance("")
-                db = EC2Instance("")
-                with group(HOST):
-                    prometheus = Prometheus("")
-                    loki = Loki("")
-                    grafana = Grafana("")
+# 4. Metrics and logs ------------------------------------------------------------
+with diagram("Metrics and logs", "observability"):
+    admin = User("Admin")
 
-    sources = [edge, app, db]
-    sources >> step(1) >> prometheus
-    sources >> step(2) >> loki
-    [prometheus, loki] >> step(3) >> grafana
-    admin >> step(4) >> ssm >> grafana
+    with group("AWS account · eu-north-1", AWS):
+        ssm = SystemsManager("Session Manager\nport forwarding")
+        with group("VPC bmc-dev", VPC):
+            with group("Public subnet", PUBLIC):
+                edge = EC2Instance("Edge host\n+ Alloy")
+            with group("Private subnet", PRIVATE):
+                app = EC2Instance("App host\n+ Alloy")
+                db = EC2Instance("Database host\n+ Alloy")
+                with group("Monitoring host", HOST):
+                    prometheus = Prometheus("Prometheus :9090\n(7 days)")
+                    loki = Loki("Loki :3100\n(7 days)")
+                    grafana = Grafana("Grafana\nlocalhost:3000")
 
-
-# 5. Administration: no SSH port, no keys kept.
-with diagram("admin-access"):
-    admin = User("")
-    ansible = Ansible("")
-    with group(AWS):
-        ssm = SystemsManager("")
-        connect = IdentityAndAccessManagementIamTemporarySecurityCredential("")
-        with group(VPC):
-            with group(PUBLIC):
-                edge = EC2Instance("")
-            with group(PRIVATE):
-                app = EC2Instance("")
-                db = EC2Instance("")
-                mon = EC2Instance("")
-
-    hosts = [edge, app, db, mon]
-    admin >> step(1) >> ssm >> hosts
-    admin >> step(2) >> ansible >> step(3) >> connect
-    ansible >> step(4) >> ssm
+    for host in (edge, app, db):
+        host >> step(1, "metrics") >> prometheus
+        host >> step(2, "logs") >> loki
+    prometheus >> step(3, "query") >> grafana
+    loki >> step(3, "query") >> grafana
+    admin >> step(4, "open Grafana") >> ssm >> line() >> grafana
 
 
-# 6. Database image (Packer + Ansible) and the database host.
-with diagram("database-image"):
-    admin = User("")
-    ansible = Ansible("")
-    tf = Terraform("")
-    with group(AWS):
-        ssm = SystemsManager("")
-        ami = EC2Ami("")
-        params = SystemsManagerParameterStore("")
-        with group(VPC):
-            with group(PRIVATE):
-                builder = EC2Instance("")
-                with group(HOST):
-                    db = EC2Instance("")
-                    volume = ElasticBlockStoreEBSVolume("")
+# 5. Administration ---------------------------------------------------------------
+with diagram("Administration: no SSH port, no stored keys", "admin-access"):
+    admin = User("Admin")
+    ansible = Ansible("Ansible\nsite.yml")
 
-    admin >> step(1) >> builder
-    ansible >> step(2) >> ssm >> builder
-    builder >> step(3) >> ami
-    tf >> step(4) >> db
-    ami >> db
-    db - volume
-    db >> step(5) >> params
+    with group("AWS account · eu-north-1", AWS):
+        ssm = SystemsManager("Session Manager")
+        connect = IdentityAndAccessManagementIamTemporarySecurityCredential("EC2 Instance Connect\n(60 s SSH key)")
+        with group("VPC bmc-dev", VPC):
+            with group("Public subnet", PUBLIC):
+                edge = EC2Instance("Edge host")
+            with group("Private subnet", PRIVATE):
+                app = EC2Instance("App host")
+                db = EC2Instance("Database host")
+                mon = EC2Instance("Monitoring host")
+
+    admin >> step(1, "shell") >> ssm
+    admin >> step(2, "configure") >> ansible
+    ansible >> step(3, "push temporary key") >> connect
+    ansible >> step(4, "SSH inside SSM session") >> ssm
+    ssm >> line() >> [edge, app, db, mon]
+
+
+# 6. Database image -----------------------------------------------------------------
+with diagram("Database image and host", "database-image"):
+    admin = User("Admin\n(packer build)")
+    ansible = Ansible("Ansible\ndatabase-image.yml")
+    terraform = Terraform("Terraform")
+
+    with group("AWS account · eu-north-1", AWS):
+        ssm = SystemsManager("Session Manager")
+        ami = EC2Ami("AMI\nbmc-database-<version>")
+        params = SystemsManagerParameterStore("Parameter Store\n(DB passwords)")
+        with group("VPC bmc-dev · private subnet", PRIVATE):
+            builder = EC2Instance("Temporary\nbuild host")
+            with group("Database host · 10.10.1.30", HOST):
+                db = EC2Instance("Database host")
+                volume = ElasticBlockStoreEBSVolume("Data volume\n(EBS)")
+
+    admin >> step(1, "start build") >> builder
+    ansible >> step(2, "configure") >> ssm >> line() >> builder
+    builder >> step(3, "save image") >> ami
+    terraform >> step(4, "launch") >> db
+    ami >> line() >> db
+    db - line() - volume
+    db >> step(5, "read passwords at boot") >> params
