@@ -2,7 +2,7 @@
 
 How BMC runs on AWS (dev; prod will copy it). Each diagram is titled and every icon, group and arrow is named; the numbered arrows are explained in the table under the diagram. A number and its arrow share a colour; grey lines only connect things on the same path.
 
-Source of the images: [`diagrams/generate.py`](diagrams/generate.py) (Python `diagrams`). Change the script, not the PNGs.
+Source of the images: [`diagrams/generate.py`](diagrams/generate.py) places every component on a grid and draws every arrow along a fixed path (icons from the Python `diagrams` package; writes `.svg` and `.png`). Change the script, not the images.
 
 ## 1. Overview
 
@@ -20,11 +20,11 @@ Source of the images: [`diagrams/generate.py`](diagrams/generate.py) (Python `di
 | 1 | Users reach the edge host's public IP through the internet gateway. |
 | 2 | The edge forwards ports 80/443 to Traefik on the app host, which routes to the services. |
 | 3 | The services use MySQL on the database host (one database and user per service). |
-| 4 | Every host pushes its metrics and logs to the monitoring host. |
-| 5 | Private hosts reach the internet (image pulls, updates) only through the edge host's NAT. Nothing from the internet can reach them. |
-| 6 | S3 traffic goes through the VPC gateway endpoint, not the internet: database backups to the backups bucket, attachments for the app. |
-| 7 | Secrets live in Parameter Store, and each host may read only what it needs: the database host its own path, the app host the service database passwords (`/bmc/dev/database/users/*`), the monitoring host Grafana's password. |
-| 8 | Systems Manager is the only way in: no SSH port is open anywhere. |
+| 4 | Private hosts reach the internet (image pulls, updates) only through the edge host's NAT. Nothing from the internet can reach them. |
+| 5 | S3 traffic goes through the VPC gateway endpoint, not the internet: database backups to the backups bucket, attachments for the app. |
+| 6 | Secrets live in Parameter Store, and each host may read only what it needs: the database host its own path, the app host the service database passwords (`/bmc/dev/database/users/*`), the monitoring host Grafana's password. |
+
+Metrics and logs from every host go to the monitoring host (§4). The only way into a host is Systems Manager; no SSH port is open anywhere (§5).
 
 ## 2. Infrastructure changes (this repository)
 
@@ -33,12 +33,11 @@ Source of the images: [`diagrams/generate.py`](diagrams/generate.py) (Python `di
 | Step | What happens |
 |---|---|
 | 1 | A PR is merged into `main`. |
-| 2 | GitHub Actions runs lint and `terraform plan` for dev and prod. |
-| 3 | The plan reads the state from the S3 state bucket. |
+| 2 | The CI workflow starts: lint first. |
+| 3 | Terraform plans dev and prod, reading the current state from the S3 state bucket. |
 | 4 | A maintainer approves the apply ("Review deployments"); nothing changes in AWS without it. |
-| 5 | CI signs in with the `bmc-ci` access key, which can only assume a role (STS). |
-| 6 | The `bmc-admin` role, limited by a permissions boundary, runs the apply. |
-| 7 | Terraform creates or changes the AWS resources. |
+| 5 | Terraform signs in with the `bmc-ci` access key, which can only assume a role (STS). |
+| 6 | As the `bmc-admin` role, limited by a permissions boundary, Terraform creates or changes the resources. |
 
 Manual actions (Run workflow): apply, destroy, stop, start.
 

@@ -1,15 +1,23 @@
 """Draws the architecture diagrams in docs/diagrams (docs/architecture.md).
 
-Every diagram has a title, every icon and group a name, and every arrow a
-step number with a short label; the tables in architecture.md explain each
-step. Regenerate after an infrastructure change:
+Every component sits on a fixed grid and every arrow follows an explicit
+right-angled path, so the layout stays clean and arrows do not cross. Icons
+come from the `diagrams` package (AWS architecture icons and a few others).
 
-    python3 -m venv .venv && .venv/bin/pip install diagrams==0.24.4
-    (needs Graphviz: apt install graphviz)
+Regenerate after an infrastructure change:
+
+    python3 -m venv .venv && .venv/bin/pip install diagrams==0.24.4 cairosvg==2.8.2
     cd docs/diagrams && ../../.venv/bin/python generate.py
+
+Writes <name>.svg and <name>.png for each diagram.
 """
 
-from diagrams import Cluster, Diagram, Edge
+import base64
+import os
+from html import escape
+
+import cairosvg
+import diagrams
 from diagrams.aws.compute import EC2Ami, EC2Instance
 from diagrams.aws.general import InternetAlt1, User, Users
 from diagrams.aws.management import (
@@ -34,218 +42,360 @@ from diagrams.onprem.monitoring import Grafana, Prometheus
 from diagrams.onprem.network import Traefik
 from diagrams.onprem.vcs import Github
 
-# Group colours follow the AWS architecture icon guide.
-FONT = {"fontname": "Helvetica", "fontsize": "15", "labeljust": "l"}
-AWS = {**FONT, "bgcolor": "#FFFFFF", "pencolor": "#232F3E", "penwidth": "2", "style": "rounded"}
-VPC = {**FONT, "bgcolor": "#F7FBF2", "pencolor": "#7AA116", "penwidth": "2", "style": "rounded"}
-PUBLIC = {**FONT, "bgcolor": "#E9F3E6", "pencolor": "#7AA116", "style": "rounded"}
-PRIVATE = {**FONT, "bgcolor": "#E6F2F8", "pencolor": "#00A4A6", "style": "rounded"}
-HOST = {**FONT, "bgcolor": "#FFFFFF", "pencolor": "#ED7100", "style": "dashed,rounded"}
-GITHUB = {**FONT, "bgcolor": "#F5F5F5", "pencolor": "#6E7781", "style": "dashed,rounded"}
+RESOURCES = os.path.join(os.path.dirname(os.path.dirname(diagrams.__file__)), "resources")
+FONT = "DejaVu Sans, Helvetica, Arial, sans-serif"
 
-GRAPH = {"fontname": "Helvetica-Bold", "fontsize": "26", "labelloc": "t",
-         "pad": "0.5", "nodesep": "0.8", "ranksep": "1.1", "splines": "spline"}
-NODE = {"fontname": "Helvetica", "fontsize": "13"}
+# Grid: column and row units in pixels (the drawing is shifted to fit).
+COL, ROW = 175, 125
+ICON = 60
 
-# One colour per step, so a number and its arrow clearly belong together.
-STEP_COLOURS = ["#D13212", "#1F6FEB", "#2DA44E", "#8250DF", "#BF8700",
+# Group styles (AWS architecture icon guide colours).
+STYLES = {
+    "aws": dict(fill="#FFFFFF", stroke="#232F3E", width=2, dash=None),
+    "vpc": dict(fill="#F7FBF2", stroke="#7AA116", width=2, dash=None),
+    "public": dict(fill="#E9F3E6", stroke="#7AA116", width=1.5, dash=None),
+    "private": dict(fill="#E6F2F8", stroke="#00A4A6", width=1.5, dash=None),
+    "host": dict(fill="#FFFFFF", stroke="#ED7100", width=1.5, dash="6,4"),
+    "github": dict(fill="#F6F8FA", stroke="#6E7781", width=1.5, dash="6,4"),
+}
+
+# One colour per step number; grey for plain connectors.
+STEP_COLOURS = ["#D13212", "#1F6FEB", "#1A7F37", "#8250DF", "#BF8700",
                 "#E36209", "#0E8A8A", "#C2185B"]
+GREY = "#8C959F"
 
 
-def step(number, text, **attrs):
-    """An arrow labelled '<number>. <text>' in the step's colour."""
-    colour = STEP_COLOURS[(number - 1) % len(STEP_COLOURS)]
-    return Edge(label=f"{number}. {text}", fontname="Helvetica-Bold", fontsize="13",
-                fontcolor=colour, color=colour, penwidth="2.2", **attrs)
+def icon_uri(cls):
+    path = os.path.join(RESOURCES, cls._icon_dir.replace("resources/", ""), cls._icon)
+    with open(path, "rb") as f:
+        return "data:image/png;base64," + base64.b64encode(f.read()).decode()
 
 
-def line():
-    """A plain connector (same host, or the continuation of a step)."""
-    return Edge(color="#8C8C8C", penwidth="1.2")
+class Drawing:
+    def __init__(self, name, title):
+        self.name, self.title = name, title
+        self.nodes, self.groups, self.edges = {}, [], []
+
+    # --- building --------------------------------------------------------------
+    def node(self, key, cls, label, col, row):
+        x, y = col * COL, row * ROW
+        lines = label.split("\n")
+        width = max(ICON, max(len(l) for l in lines) * 7.4)
+        self.nodes[key] = dict(cls=cls, lines=lines, x=x, y=y, w=width,
+                               top=y - ICON / 2, bottom=y + ICON / 2 + 8 + 15 * len(lines))
+
+    def group(self, title, style, members, pad=18, left=0, top=0, title_at="top", align="left"):
+        """A box around members (node keys or earlier groups). left/top: extra
+        space on that side. title_at: "top" or "bottom"; align: "left"/"right"."""
+        boxes = []
+        for m in members:
+            if isinstance(m, dict):
+                boxes.append((m["x1"], m["y1"], m["x2"], m["y2"]))
+            else:
+                n = self.nodes[m]
+                boxes.append((n["x"] - n["w"] / 2, n["top"], n["x"] + n["w"] / 2, n["bottom"]))
+        band = 24
+        x1 = min(b[0] for b in boxes) - pad - left
+        x2 = max(b[2] for b in boxes) + pad
+        y1 = min(b[1] for b in boxes) - pad - top - (band if title_at == "top" else 0)
+        y2 = max(b[3] for b in boxes) + pad + (band if title_at == "bottom" else 0)
+        title_w = len(title) * 8.7 + 24
+        if x2 - x1 < title_w:  # the title always fits inside its box
+            if align == "right":
+                x1 = x2 - title_w
+            else:
+                x2 = x1 + title_w
+        g = dict(title=title, style=style, x1=x1, y1=y1, x2=x2, y2=y2, title_at=title_at, align=align)
+        self.groups.append(g)
+        return g
+
+    def anchor(self, key, side, dx=0):
+        """N: above the icon. S: below the name. E/W: beside the icon."""
+        n = self.nodes[key]
+        half = ICON / 2 + 6
+        return {"N": (n["x"] + dx, n["top"] - 6), "S": (n["x"] + dx, n["bottom"] + 4),
+                "E": (n["x"] + half, n["y"] + dx),
+                "W": (n["x"] - half, n["y"] + dx)}[side]
+
+    def point(self, spec):
+        if spec[0] in self.nodes:
+            return self.anchor(*spec)
+        return (spec[0] * COL, spec[1] * ROW)
+
+    def edge(self, start, end, via=(), step=None, text="", dashed=False, label_at=None, arrow=True):
+        """start/end: (node key, side[, offset]) or a grid point (col, row).
+        via: ("x", col) / ("y", row) turns at that column / row, or (col, row)."""
+        points = [self.point(start)]
+        for v in via:
+            if v[0] == "x":
+                points.append((v[1] * COL, points[-1][1]))
+            elif v[0] == "y":
+                points.append((points[-1][0], v[1] * ROW))
+            else:
+                points.append((v[0] * COL, v[1] * ROW))
+        end_point = self.point(end)
+        last = points[-1]
+        if last[0] != end_point[0] and last[1] != end_point[1]:  # one right-angle turn
+            vertical_end = isinstance(end[1], str) and end[1] in "NS"
+            points.append((end_point[0], last[1]) if vertical_end else (last[0], end_point[1]))
+        points.append(end_point)
+        self.edges.append(dict(points=points, step=step, text=text, dashed=dashed,
+                               label_at=label_at, arrow=arrow))
+
+    # --- rendering ---------------------------------------------------------------
+    def render(self):
+        labels = []
+        for e in self.edges:
+            idx = len(STEP_COLOURS) if e["step"] is None else (e["step"] - 1) % len(STEP_COLOURS)
+            e["idx"], e["colour"] = idx, (GREY if e["step"] is None else STEP_COLOURS[idx])
+            if e["step"] is not None or e["text"]:
+                text = (f"{e['step']}. " if e["step"] is not None else "") + e["text"]
+                if e["label_at"]:
+                    lx, ly = e["label_at"][0] * COL, e["label_at"][1] * ROW
+                else:  # middle of the longest segment
+                    segs = list(zip(e["points"], e["points"][1:]))
+                    (ax, ay), (bx, by) = max(segs, key=lambda s: abs(s[0][0] - s[1][0]) + abs(s[0][1] - s[1][1]))
+                    lx, ly = (ax + bx) / 2, (ay + by) / 2
+                labels.append((lx, ly, text, e["colour"], len(text) * 7.6 + 14))
+
+        # Bounding box of everything, then shift it below the title.
+        xs, ys = [], []
+        for g in self.groups:
+            xs += [g["x1"], g["x2"]]; ys += [g["y1"], g["y2"]]
+        for n in self.nodes.values():
+            xs += [n["x"] - n["w"] / 2, n["x"] + n["w"] / 2]; ys += [n["top"], n["bottom"]]
+        for e in self.edges:
+            xs += [p[0] for p in e["points"]]; ys += [p[1] for p in e["points"]]
+        for lx, ly, _, _, w in labels:
+            xs += [lx - w / 2, lx + w / 2]; ys += [ly - 11, ly + 11]
+        margin, title_band = 30, 80
+        dx, dy = margin - min(xs), title_band - min(ys)
+        width, height = max(xs) + dx + margin, max(ys) + dy + margin
+        width = max(width, len(self.title) * 15 + 2 * margin)
+
+        out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width:.0f}" height="{height:.0f}" '
+               f'viewBox="0 0 {width:.0f} {height:.0f}" font-family="{FONT}">', '<defs>']
+        for i, colour in enumerate(STEP_COLOURS + [GREY]):
+            out.append(f'<marker id="a{i}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" '
+                       f'markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="{colour}"/></marker>')
+        out.append('</defs>')
+        out.append('<rect width="100%" height="100%" fill="#FFFFFF"/>')
+        out.append(f'<text x="{width / 2:.0f}" y="46" text-anchor="middle" font-size="24" '
+                   f'font-weight="bold" fill="#24292F">{escape(self.title)}</text>')
+        out.append(f'<g transform="translate({dx:.0f},{dy:.0f})">')
+
+        for g in sorted(self.groups, key=lambda g: (g["x2"] - g["x1"]) * (g["y2"] - g["y1"]), reverse=True):
+            s = STYLES[g["style"]]
+            dash = f' stroke-dasharray="{s["dash"]}"' if s["dash"] else ""
+            out.append(f'<rect x="{g["x1"]:.0f}" y="{g["y1"]:.0f}" width="{g["x2"] - g["x1"]:.0f}" '
+                       f'height="{g["y2"] - g["y1"]:.0f}" rx="10" fill="{s["fill"]}" stroke="{s["stroke"]}" '
+                       f'stroke-width="{s["width"]}"{dash}/>')
+            ty = g["y1"] + 19 if g["title_at"] == "top" else g["y2"] - 9
+            if g["align"] == "left":
+                tx, anchor = g["x1"] + 12, "start"
+            else:
+                tx, anchor = g["x2"] - 12, "end"
+            out.append(f'<text x="{tx:.0f}" y="{ty:.0f}" text-anchor="{anchor}" font-size="14" '
+                       f'font-weight="bold" fill="{s["stroke"]}">{escape(g["title"])}</text>')
+
+        for e in self.edges:
+            width_px = 1.6 if e["step"] is None else 2.4
+            dash = ' stroke-dasharray="7,5"' if e["dashed"] else ""
+            marker = f' marker-end="url(#a{e["idx"]})"' if e["arrow"] else ""
+            d = " ".join(f"{'M' if i == 0 else 'L'}{x:.0f},{y:.0f}" for i, (x, y) in enumerate(e["points"]))
+            out.append(f'<path d="{d}" fill="none" stroke="{e["colour"]}" stroke-width="{width_px}"{dash} '
+                       f'stroke-linejoin="round"{marker}/>')
+        for lx, ly, text, colour, w in labels:  # on top of every line
+            out.append(f'<rect x="{lx - w / 2:.0f}" y="{ly - 11:.0f}" width="{w:.0f}" height="22" rx="11" '
+                       f'fill="#FFFFFF" stroke="{colour}" stroke-width="1.2"/>')
+            out.append(f'<text x="{lx:.0f}" y="{ly + 4.5:.0f}" text-anchor="middle" font-size="12.5" '
+                       f'font-weight="bold" fill="{colour}">{escape(text)}</text>')
+
+        for n in self.nodes.values():
+            out.append(f'<image x="{n["x"] - ICON / 2:.0f}" y="{n["top"]:.0f}" width="{ICON}" height="{ICON}" '
+                       f'href="{icon_uri(n["cls"])}"/>')
+            for i, line in enumerate(n["lines"]):
+                out.append(f'<text x="{n["x"]:.0f}" y="{n["y"] + ICON / 2 + 20 + 15 * i:.0f}" text-anchor="middle" '
+                           f'font-size="12.5" fill="#24292F">{escape(line)}</text>')
+        out.append("</g></svg>")
+        svg = "\n".join(out)
+        with open(f"{self.name}.svg", "w") as f:
+            f.write(svg)
+        cairosvg.svg2png(bytestring=svg.encode(), write_to=f"{self.name}.png", scale=1.5)
 
 
-def diagram(title, filename, direction="LR"):
-    return Diagram(title, filename=filename, show=False, direction=direction,
-                   graph_attr=GRAPH, node_attr=NODE, outformat="png")
+# 1. Overview ---------------------------------------------------------------------
+d = Drawing("overview", "BMC on AWS: dev environment")
+d.node("users", Users, "Users", 0, 1)
+d.node("internet", InternetAlt1, "Internet\n(GHCR, updates)", 0, -0.6)
+d.node("igw", InternetGateway, "Internet gateway", 1.2, 1)
+d.node("edge", EC2Instance, "Edge host\nNAT + port forward", 2.5, 1)
+d.node("traefik", Traefik, "Traefik", 4.0, 1)
+d.node("services", Docker, "Services\n(containers)", 5.0, 1)
+d.node("mysql", Mysql, "MySQL 8.4", 6.2, 1)
+d.node("ebs", ElasticBlockStoreEBSVolume, "Data volume\n(EBS)", 7.2, 1)
+d.node("prom", Prometheus, "Prometheus\n+ Loki", 7.2, 2.7)
+d.node("grafana", Grafana, "Grafana", 8.2, 2.7)
+d.node("endpoint", Endpoint, "S3 gateway\nendpoint", 6.2, 4.3)
+d.node("params", SystemsManagerParameterStore, "Parameter Store\n(secrets)", 5.0, 5.8)
+d.node("s3", SimpleStorageServiceS3Bucket, "S3 buckets\n(backups, attachments)", 6.2, 5.8)
+public = d.group("Public subnet · 10.10.0.0/24", "public", ["edge"], title_at="bottom")
+app = d.group("App host · 10.10.1.10", "host", ["traefik", "services"])
+db = d.group("Database host · 10.10.1.30", "host", ["mysql", "ebs"])
+mon = d.group("Monitoring host · 10.10.1.20", "host", ["prom", "grafana"])
+private = d.group("Private subnet · 10.10.1.0/24", "private", [app, db, mon], top=34)
+vpc = d.group("VPC bmc-dev · 10.10.0.0/16 · eu-north-1a", "vpc",
+              ["igw", public, private, "endpoint"], title_at="bottom")
+regional = d.group("Regional services", "aws", ["params", "s3"], pad=16, title_at="bottom")
+d.group("AWS account · eu-north-1", "aws", [vpc, regional], pad=22, title_at="bottom")
+d.edge(("users", "E"), ("igw", "W"), step=1, text="HTTP 80/443")
+d.edge(("igw", "E"), ("edge", "W"))
+d.edge(("edge", "E"), ("traefik", "W"), step=2, text="forward")
+d.edge(("traefik", "E"), ("services", "W"))
+d.edge(("services", "E"), ("mysql", "W"), step=3, text="SQL 3306")
+d.edge(("mysql", "E"), ("ebs", "W"))
+d.edge(("services", "N"), ("edge", "N"), via=[("y", 0.27)], step=4, text="outbound via NAT", dashed=True)
+d.edge(("igw", "N"), ("internet", "E"), via=[("y", -0.6)], dashed=True, text="NAT to internet")
+d.edge(("mysql", "S"), ("endpoint", "N"), step=5, text="backups", dashed=True)
+d.edge(("endpoint", "S"), ("s3", "N"))
+d.edge(("services", "S"), ("params", "N"), step=6, text="read secrets", dashed=True, label_at=(5.0, 3.6))
+d.edge(("prom", "E"), ("grafana", "W"))
+d.render()
 
 
-def group(title, attrs):
-    return Cluster(title, graph_attr=attrs)
+# 2. Infrastructure pipeline ---------------------------------------------------------
+d = Drawing("infra-pipeline", "Infrastructure changes: merge → plan → approve → apply")
+d.node("dev", User, "Developer", 0, 1)
+d.node("repo", Github, "main branch", 1.3, 1)
+d.node("ci", GithubActions, "CI workflow\nlint · plan · apply", 2.6, 1)
+d.node("tf", Terraform, "Terraform", 3.9, 1)
+d.node("approver", User, "Maintainer\n(approver)", 2.6, 2.8)
+d.node("key", IdentityAndAccessManagementIamLongTermSecurityCredential, "bmc-ci\naccess key", 3.9, 2.8)
+d.node("state", SimpleStorageServiceS3Bucket, "Terraform state\n(S3)", 5.4, 1)
+d.node("resources", EC2Instance, "Network, hosts,\nIAM, buckets", 6.8, 1)
+d.node("sts", IdentityAndAccessManagementIamAWSSts, "STS\nAssumeRole", 5.4, 2.8)
+d.node("role", IdentityAndAccessManagementIamRole, "bmc-admin role\n(permissions boundary)", 6.8, 2.8)
+d.group("GitHub · labdsof-infra", "github", ["repo", "ci", "tf", "key"])
+env = d.group("dev / prod", "vpc", ["resources"], pad=12)
+d.group("AWS account · eu-north-1", "aws", ["state", "sts", "role", env])
+d.edge(("dev", "E"), ("repo", "W"), step=1, text="merge PR")
+d.edge(("repo", "E"), ("ci", "W"), step=2, text="run")
+d.edge(("ci", "E"), ("tf", "W"), step=3, text="plan")
+d.edge(("tf", "E"), ("state", "W"), text="read state")
+d.edge(("approver", "N"), ("ci", "S"), step=4, text="approve")
+d.edge(("tf", "S"), ("key", "N"), text="uses")
+d.edge(("key", "E"), ("sts", "W"), step=5, text="assume role")
+d.edge(("sts", "E"), ("role", "W"))
+d.edge(("role", "N"), ("resources", "S"), step=6, text="apply")
+d.render()
 
 
-# 1. Overview ------------------------------------------------------------------
-with diagram("BMC on AWS: dev environment", "overview"):
-    users = Users("Users\n(browser)")
-    ghcr = InternetAlt1("Internet\n(GHCR, updates)")
-
-    with group("AWS account · eu-north-1", AWS):
-        with group("Regional services", AWS):
-            ssm = SystemsManager("Systems Manager\n(admin access)")
-            params = SystemsManagerParameterStore("Parameter Store\n(secrets)")
-            s3 = SimpleStorageServiceS3Bucket("S3\n(backups, attachments)")
-
-        with group("VPC bmc-dev · 10.10.0.0/16 · eu-north-1a", VPC):
-            igw = InternetGateway("Internet\ngateway")
-            s3_endpoint = Endpoint("S3 gateway\nendpoint")
-
-            with group("Public subnet · 10.10.0.0/24", PUBLIC):
-                edge = EC2Instance("Edge host\nNAT + port forward")
-
-            with group("Private subnet · 10.10.1.0/24", PRIVATE):
-                with group("App host · 10.10.1.10", HOST):
-                    traefik = Traefik("Traefik")
-                    services = Docker("Services\n(client, issue,\ndispatch, …)")
-                with group("Database host · 10.10.1.30", HOST):
-                    mysql = Mysql("MySQL 8.4")
-                    volume = ElasticBlockStoreEBSVolume("Data volume\n(EBS)")
-                with group("Monitoring host · 10.10.1.20", HOST):
-                    prometheus = Prometheus("Prometheus\n+ Loki")
-                    grafana = Grafana("Grafana")
-
-    users >> step(1, "HTTP 80/443") >> igw >> line() >> edge
-    edge >> step(2, "forward") >> traefik >> line() >> services
-    services >> step(3, "SQL 3306") >> mysql
-    mysql - line() - volume
-    [services, mysql] >> step(4, "metrics + logs") >> prometheus
-    prometheus - line() - grafana
-    services >> step(5, "outbound via NAT", style="dashed") >> edge
-    igw >> Edge(color="#8C8C8C", style="dashed") >> ghcr
-    mysql >> step(6, "backups", style="dashed") >> s3_endpoint >> line() >> s3
-    services >> step(7, "read secrets", style="dotted") >> params
-    ssm >> step(8, "sessions, Run Command", style="dotted") >> services
+# 3. Application deploy ---------------------------------------------------------------
+d = Drawing("app-deploy", "Application deploy to dev")
+d.node("dev", User, "Developer", 0, 1)
+d.node("repo", Github, "main branch", 1.2, 1)
+d.node("ci", GithubActions, "dev.yml +\ndeploy.yml", 2.4, 1)
+d.node("ghcr", Docker, "GHCR\nlabdsof-<service>", 4.0, 1)
+d.node("zap", GithubActions, "ZAP scan", 2.4, -0.6)
+d.node("key", IdentityAndAccessManagementIamLongTermSecurityCredential, "bmc-deploy-dev\naccess key", 2.4, 2.7)
+d.node("run", SystemsManagerRunCommand, "SSM Run Command", 5.1, 2.7)
+d.node("edge", EC2Instance, "Edge host", 6.8, 1)
+d.node("deploy", EC2Instance, "bmc-app-deploy", 6.8, 2.7)
+d.node("traefik", Traefik, "Traefik +\nservices", 8.1, 2.7)
+d.node("params", SystemsManagerParameterStore, "Parameter Store\n(DB passwords)", 6.8, 4.8)
+d.group("GitHub · LABDSOF_G9A", "github", ["repo", "ci", "ghcr", "zap", "key"])
+public = d.group("Public subnet", "public", ["edge"], left=110)
+apphost = d.group("App host", "host", ["deploy", "traefik"], left=40)
+private = d.group("Private subnet", "private", [apphost], left=50)
+vpc = d.group("VPC bmc-dev", "vpc", [public, private])
+d.group("AWS account · eu-north-1", "aws", [vpc, "run", "params"])
+d.edge(("dev", "E"), ("repo", "W"), step=1, text="merge PR")
+d.edge(("repo", "E"), ("ci", "W"))
+d.edge(("ci", "E"), ("ghcr", "W"), step=2, text="build · sign · push")
+d.edge(("ci", "S"), ("key", "N"))
+d.edge(("key", "E"), ("run", "W"), step=3, text="send command")
+d.edge(("run", "E"), ("deploy", "W"), step=4, text="deploy <tag>")
+d.edge(("deploy", "S"), ("params", "N"), step=5, text="read passwords", label_at=(6.8, 4.25))
+d.edge(("deploy", "N"), ("edge", "S"), dashed=True)
+d.edge(("edge", "W"), ("ghcr", "E"), step=6, text="pull images (via NAT)", dashed=True)
+d.edge(("deploy", "E"), ("traefik", "W"), text="up -d")
+d.edge(("ci", "N"), ("zap", "S"))
+d.edge(("zap", "E"), ("edge", "N"), via=[("x", 6.8)], step=7, text="DAST scan")
+d.edge(("edge", "E"), ("traefik", "N"), via=[("x", 8.1)], text="HTTP")
+d.render()
 
 
-# 2. Infrastructure pipeline ---------------------------------------------------
-with diagram("Infrastructure changes: merge → plan → approve → apply", "infra-pipeline"):
-    developer = User("Developer")
-    approver = User("Maintainer\n(approver)")
-
-    with group("GitHub · labdsof-infra", GITHUB):
-        repo = Github("main branch")
-        actions = GithubActions("CI workflow\nlint · plan · apply")
-        key = IdentityAndAccessManagementIamLongTermSecurityCredential("bmc-ci\naccess key")
-    terraform = Terraform("Terraform")
-
-    with group("AWS account · eu-north-1", AWS):
-        sts = IdentityAndAccessManagementIamAWSSts("STS\nAssumeRole")
-        role = IdentityAndAccessManagementIamRole("bmc-admin role\n(permissions boundary)")
-        state = SimpleStorageServiceS3Bucket("Terraform state\n(S3)")
-        with group("VPC bmc-dev", VPC):
-            hosts = EC2Instance("Network, hosts,\nIAM, buckets")
-
-    developer >> step(1, "merge PR") >> repo
-    repo >> step(2, "trigger") >> actions
-    actions >> step(3, "plan dev + prod") >> terraform
-    terraform >> line() >> state
-    approver >> step(4, "Review deployments") >> actions
-    actions >> line() >> key
-    key >> step(5, "assume role") >> sts >> line() >> role
-    role >> step(6, "apply") >> terraform
-    terraform >> step(7, "create / change") >> hosts
+# 4. Metrics and logs ---------------------------------------------------------------------
+d = Drawing("observability", "Metrics and logs")
+d.node("edge", EC2Instance, "Edge host\n+ Alloy", 0, 0.6)
+d.node("app", EC2Instance, "App host\n+ Alloy", 0, 2.4)
+d.node("db", EC2Instance, "Database host\n+ Alloy", 0, 3.9)
+d.node("prom", Prometheus, "Prometheus :9090\n(7 days)", 2.7, 2.4)
+d.node("loki", Loki, "Loki :3100\n(7 days)", 2.7, 3.9)
+d.node("grafana", Grafana, "Grafana\nlocalhost:3000", 4.1, 3.15)
+d.node("ssm", SystemsManager, "Session Manager\nport forwarding", 5.6, 3.15)
+d.node("admin", User, "Admin", 7.0, 3.15)
+public = d.group("Public subnet", "public", ["edge"])
+monhost = d.group("Monitoring host", "host", ["prom", "loki", "grafana"])
+private = d.group("Private subnet", "private", ["app", "db", monhost])
+vpc = d.group("VPC bmc-dev", "vpc", [public, private])
+d.group("AWS account · eu-north-1", "aws", [vpc, "ssm"])
+# Every host's Alloy sends both: one bus line joins the three hosts.
+d.edge(("edge", "E"), (1.0, 3.9), via=[("x", 1.0)], arrow=False)
+d.edge(("app", "E"), ("prom", "W"), step=1, text="metrics", label_at=(1.75, 2.4))
+d.edge(("db", "E"), ("loki", "W"), step=2, text="logs", label_at=(1.75, 3.9))
+d.edge(("prom", "E"), ("grafana", "W"), via=[("x", 3.4)], step=3, text="query", label_at=(3.4, 2.75))
+d.edge(("loki", "E"), ("grafana", "W"), via=[("x", 3.4)])
+d.edge(("admin", "W"), ("ssm", "E"), step=4, text="open Grafana")
+d.edge(("ssm", "W"), ("grafana", "E"), text="port forward")
+d.render()
 
 
-# 3. Application deploy --------------------------------------------------------
-with diagram("Application deploy to dev", "app-deploy"):
-    developer = User("Developer")
-
-    with group("GitHub · LABDSOF_G9A", GITHUB):
-        repo = Github("main branch")
-        actions = GithubActions("dev.yml + deploy.yml")
-        registry = Docker("GHCR\nlabdsof-<service>")
-        key = IdentityAndAccessManagementIamLongTermSecurityCredential("bmc-deploy-dev\naccess key")
-        zap = GithubActions("ZAP scan")
-
-    with group("AWS account · eu-north-1", AWS):
-        run_command = SystemsManagerRunCommand("SSM Run Command")
-        params = SystemsManagerParameterStore("Parameter Store\n(DB passwords)")
-        with group("VPC bmc-dev", VPC):
-            with group("Public subnet", PUBLIC):
-                edge = EC2Instance("Edge host")
-            with group("Private subnet", PRIVATE):
-                with group("App host", HOST):
-                    deploy = EC2Instance("bmc-app-deploy")
-                    traefik = Traefik("Traefik +\nservices")
-
-    developer >> step(1, "merge PR") >> repo >> line() >> actions
-    actions >> step(2, "build · scan · sign · push") >> registry
-    actions >> line() >> key
-    key >> step(3, "send command") >> run_command
-    run_command >> step(4, "run deploy <tag>") >> deploy
-    deploy >> step(5, "read passwords") >> params
-    deploy >> step(6, "pull images (via NAT)", style="dashed") >> edge >> line() >> registry
-    deploy >> line() >> traefik
-    actions >> line() >> zap
-    zap >> step(7, "DAST scan") >> edge >> line() >> traefik
+# 5. Administration ------------------------------------------------------------------------
+d = Drawing("admin-access", "Administration: no SSH port, no stored keys")
+d.node("admin", User, "Admin", 0, 1.6)
+d.node("ansible", Ansible, "Ansible\nsite.yml", 0, 3.4)
+d.node("connect", IdentityAndAccessManagementIamTemporarySecurityCredential,
+       "EC2 Instance Connect\n(60 s SSH key)", 1.7, 5.0)
+d.node("ssm", SystemsManager, "Session Manager", 2.7, 1.6)
+d.node("edge", EC2Instance, "Edge host", 4.6, 0.3)
+d.node("app", EC2Instance, "App host", 4.6, 2.0)
+d.node("db", EC2Instance, "Database host", 4.6, 3.3)
+d.node("mon", EC2Instance, "Monitoring host", 4.6, 4.6)
+public = d.group("Public subnet", "public", ["edge"])
+private = d.group("Private subnet", "private", ["app", "db", "mon"])
+vpc = d.group("VPC bmc-dev", "vpc", [public, private])
+d.group("AWS account · eu-north-1", "aws", ["ssm", "connect", vpc], title_at="bottom")
+d.edge(("admin", "E"), ("ssm", "W"), step=1, text="shell")
+d.edge(("admin", "S"), ("ansible", "N"), step=2, text="configure")
+d.edge(("ansible", "S"), ("connect", "W"), via=[("y", 5.0)], step=3, text="push key", label_at=(0.85, 5.0))
+d.edge(("ansible", "E"), ("ssm", "S"), via=[("x", 2.7)], step=4, text="SSH inside SSM session",
+       label_at=(1.35, 3.4))
+for host, row in (("edge", 0.3), ("app", 2.0), ("db", 3.3), ("mon", 4.6)):
+    d.edge(("ssm", "E"), (host, "W"), via=[("x", 3.6), ("y", row)])
+d.render()
 
 
-# 4. Metrics and logs ------------------------------------------------------------
-with diagram("Metrics and logs", "observability"):
-    admin = User("Admin")
-
-    with group("AWS account · eu-north-1", AWS):
-        ssm = SystemsManager("Session Manager\nport forwarding")
-        with group("VPC bmc-dev", VPC):
-            with group("Public subnet", PUBLIC):
-                edge = EC2Instance("Edge host\n+ Alloy")
-            with group("Private subnet", PRIVATE):
-                app = EC2Instance("App host\n+ Alloy")
-                db = EC2Instance("Database host\n+ Alloy")
-                with group("Monitoring host", HOST):
-                    prometheus = Prometheus("Prometheus :9090\n(7 days)")
-                    loki = Loki("Loki :3100\n(7 days)")
-                    grafana = Grafana("Grafana\nlocalhost:3000")
-
-    for host in (edge, app, db):
-        host >> step(1, "metrics") >> prometheus
-        host >> step(2, "logs") >> loki
-    prometheus >> step(3, "query") >> grafana
-    loki >> step(3, "query") >> grafana
-    admin >> step(4, "open Grafana") >> ssm >> line() >> grafana
-
-
-# 5. Administration ---------------------------------------------------------------
-with diagram("Administration: no SSH port, no stored keys", "admin-access"):
-    admin = User("Admin")
-    ansible = Ansible("Ansible\nsite.yml")
-
-    with group("AWS account · eu-north-1", AWS):
-        ssm = SystemsManager("Session Manager")
-        connect = IdentityAndAccessManagementIamTemporarySecurityCredential("EC2 Instance Connect\n(60 s SSH key)")
-        with group("VPC bmc-dev", VPC):
-            with group("Public subnet", PUBLIC):
-                edge = EC2Instance("Edge host")
-            with group("Private subnet", PRIVATE):
-                app = EC2Instance("App host")
-                db = EC2Instance("Database host")
-                mon = EC2Instance("Monitoring host")
-
-    admin >> step(1, "shell") >> ssm
-    admin >> step(2, "configure") >> ansible
-    ansible >> step(3, "push temporary key") >> connect
-    ansible >> step(4, "SSH inside SSM session") >> ssm
-    ssm >> line() >> [edge, app, db, mon]
-
-
-# 6. Database image -----------------------------------------------------------------
-with diagram("Database image and host", "database-image"):
-    admin = User("Admin\n(packer build)")
-    ansible = Ansible("Ansible\ndatabase-image.yml")
-    terraform = Terraform("Terraform")
-
-    with group("AWS account · eu-north-1", AWS):
-        ssm = SystemsManager("Session Manager")
-        ami = EC2Ami("AMI\nbmc-database-<version>")
-        params = SystemsManagerParameterStore("Parameter Store\n(DB passwords)")
-        with group("VPC bmc-dev · private subnet", PRIVATE):
-            builder = EC2Instance("Temporary\nbuild host")
-            with group("Database host · 10.10.1.30", HOST):
-                db = EC2Instance("Database host")
-                volume = ElasticBlockStoreEBSVolume("Data volume\n(EBS)")
-
-    admin >> step(1, "start build") >> builder
-    ansible >> step(2, "configure") >> ssm >> line() >> builder
-    builder >> step(3, "save image") >> ami
-    terraform >> step(4, "launch") >> db
-    ami >> line() >> db
-    db - line() - volume
-    db >> step(5, "read passwords at boot") >> params
+# 6. Database image ----------------------------------------------------------------------------
+d = Drawing("database-image", "Database image and host")
+d.node("admin", User, "Admin\n(packer build)", 2.4, -1.4)
+d.node("ansible", Ansible, "Ansible\ndatabase-image.yml", 0, 1)
+d.node("ssm", SystemsManager, "Session Manager", 1.2, 1)
+d.node("builder", EC2Instance, "Temporary\nbuild host", 2.4, 1)
+d.node("ami", EC2Ami, "AMI\nbmc-database-<version>", 3.8, 2.8)
+d.node("tf", Terraform, "Terraform", 5.2, -1.4)
+d.node("db", EC2Instance, "Database host", 5.2, 1)
+d.node("ebs", ElasticBlockStoreEBSVolume, "Data volume\n(EBS)", 6.4, 1)
+d.node("params", SystemsManagerParameterStore, "Parameter Store\n(DB passwords)", 5.2, 2.8)
+dbhost = d.group("Database host · 10.10.1.30", "host", ["db", "ebs"], align="right", title_at="bottom")
+private = d.group("VPC bmc-dev · private subnet", "private", ["builder", dbhost], align="right")
+d.group("AWS account · eu-north-1", "aws", ["ssm", private, "ami", "params"])
+d.edge(("admin", "S"), ("builder", "N"), step=1, text="start build", label_at=(2.4, -0.45))
+d.edge(("ansible", "E"), ("ssm", "W"), step=2, text="configure")
+d.edge(("ssm", "E"), ("builder", "W"))
+d.edge(("builder", "S"), ("ami", "W"), via=[("y", 2.8)], step=3, text="save image", label_at=(3.0, 2.8))
+d.edge(("ami", "N"), ("db", "W"), via=[("y", 1)])
+d.edge(("tf", "S"), ("db", "N"), step=4, text="launch", label_at=(5.2, -0.45))
+d.edge(("db", "E"), ("ebs", "W"))
+d.edge(("db", "S"), ("params", "N"), step=5, text="read passwords at boot", label_at=(5.2, 2.2))
+d.render()
