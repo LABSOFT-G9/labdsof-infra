@@ -124,7 +124,21 @@ deploy job (LABSOFT-G9/LABDSOF_G9A, environment dev)
   4. smoke check and ZAP against http://<edge IP>
 ```
 
-`bmc-app-deploy <tag>` reads the service database users' passwords from Parameter Store (`/bmc/dev/database/users/*`) into `/run/bmc-app/deploy.env` (memory only, root only) as `<NAME>_DB_PASSWORD`, with `BMC_TAG`, `DB_HOST` and `DB_PORT`, then runs `docker compose pull` and `up -d`. The images are public in GHCR, so no registry login is needed.
+`bmc-app-deploy <tag>` reads the service database users' passwords from Parameter Store (`/bmc/dev/database/users/*`) into `/run/bmc-app/deploy.env` (memory only, root only) as `<NAME>_DB_PASSWORD`, with `BMC_TAG`, `BMC_PUBLIC_HOST`, `DB_HOST` and `DB_PORT`, then runs `docker compose pull` and `up -d`. The images are public in GHCR, so no registry login is needed.
+
+### Public name (DuckDNS)
+
+dev is reached as **`bmc-g9.duckdns.org`** (`app_public_host` in `ansible/roles/app/defaults/main.yml`): Keycloak's hostname and token issuer and the TLS certificate need a name that does not change, while the edge host's public IP changes on every start. On the application host, `bmc-duckdns-update.timer` runs `bmc-duckdns-update` a minute after boot and every 5 minutes: it reads the DuckDNS token from `/bmc/dev/app/duckdns_token` and calls DuckDNS's update with an empty `ip=`. The request leaves through the edge host's NAT, so DuckDNS records the edge host's public IP, and the edge host still holds no secrets. After a `start`, the name follows the new IP within about 6 minutes (plus DuckDNS's 60 s TTL).
+
+The token belongs to the DuckDNS account that owns the name; it is stored by hand, never in Git:
+
+```bash
+read -rs DUCKDNS_TOKEN   # paste the token from duckdns.org, then Enter
+aws ssm put-parameter --type SecureString --name /bmc/dev/app/duckdns_token --value "$DUCKDNS_TOKEN" --query Version
+unset DUCKDNS_TOKEN
+```
+
+Check on the host (SSM session): `systemctl list-timers bmc-duckdns-update.timer`, `journalctl -u bmc-duckdns-update`, and from anywhere `dig +short bmc-g9.duckdns.org` should match `terraform output edge_public_ip`.
 
 `bmc-deploy-dev` can only run `AWS-RunShellScript` on instances tagged `Environment=dev` and `Role=app`, read its command results and list instances. Its access key is created by hand and stored only in the application repository's `dev` environment, never printed:
 
@@ -139,7 +153,7 @@ aws iam create-access-key --user-name bmc-deploy-dev --query 'AccessKey.[AccessK
 
 1. **Create**: merge to `main`. The run plans dev and prod, then each environment whose plan has changes waits for approval: open the run, read the plan in its summary, **Review deployments** → approve. dev applies first, prod only after dev succeeded. To apply without a new merge, use the button: Actions → CI → Run workflow on `main`, environment, action `apply`.
 2. **Test**: runbook checks (Session Manager, MySQL up, a manual backup lands in S3, a restore).
-2b. **Pause**: the button with action `stop` stops every instance of the environment: no instance hours are billed, the disks (and MySQL data) and buckets stay. `start` brings it back in a minute or two, the edge host first. The edge host's public IP changes on every start. While stopped, dev costs only its disks (about USD 6.70 a month).
+2b. **Pause**: the button with action `stop` stops every instance of the environment: no instance hours are billed, the disks (and MySQL data) and buckets stay. `start` brings it back in a minute or two, the edge host first. The edge host's public IP changes on every start; `bmc-g9.duckdns.org` follows it (see [Public name](#public-name-duckdns)). While stopped, dev costs only its disks (about USD 6.70 a month).
 3. **Destroy**: the button with action `destroy`. It shows the destroy plan in the summary and removes everything in that environment, including the attachments and backups buckets. `prod` waits for approval.
 4. **Clean up what Terraform does not own** (costs cents, but adds up):
    - old AMIs: deregister them and delete their snapshots (EC2 → AMIs, EC2 → Snapshots);

@@ -1,0 +1,37 @@
+#!/bin/bash
+# Points the environment's DuckDNS name (BMC_DUCKDNS_DOMAIN) at the edge
+# host's current public address. Run by bmc-duckdns-update.timer at boot and
+# every few minutes, because the edge host's address changes when it is
+# stopped and started (no Elastic IP).
+#
+# Runs on the application host on purpose: its internet traffic leaves through
+# the edge host's NAT, so DuckDNS sees (and records, with an empty ip=) the
+# edge host's public address, and the edge host keeps holding no secrets.
+# The token is read from Parameter Store (<BMC_PARAMETER_PREFIX>/duckdns_token)
+# and never written to disk or passed on a command line.
+# Configuration: /etc/bmc/app.env (Ansible, ansible/roles/app).
+set -euo pipefail
+
+# shellcheck disable=SC1091
+source /etc/bmc/app.env
+: "${AWS_REGION:?}" "${BMC_PARAMETER_PREFIX:?}"
+
+if [ -z "${BMC_DUCKDNS_DOMAIN:-}" ]; then
+  echo "BMC_DUCKDNS_DOMAIN is not set: nothing to update"
+  exit 0
+fi
+[[ "$BMC_DUCKDNS_DOMAIN" =~ ^[a-z0-9-]{1,63}$ ]] || { echo "Invalid DuckDNS domain: $BMC_DUCKDNS_DOMAIN" >&2; exit 1; }
+
+token=$(aws ssm get-parameter --region "$AWS_REGION" --with-decryption \
+  --name "$BMC_PARAMETER_PREFIX/duckdns_token" --query Parameter.Value --output text)
+
+# The URL holds the token: give it to curl on stdin, not as an argument.
+answer=$(printf 'url = "https://www.duckdns.org/update?domains=%s&token=%s&ip="\n' \
+  "$BMC_DUCKDNS_DOMAIN" "$token" | curl --silent --show-error --fail --max-time 20 --config -)
+unset token
+
+if [ "$answer" != "OK" ]; then
+  echo "DuckDNS refused the update for $BMC_DUCKDNS_DOMAIN (answer: $answer)" >&2
+  exit 1
+fi
+echo "$BMC_DUCKDNS_DOMAIN.duckdns.org points at this environment's edge address"

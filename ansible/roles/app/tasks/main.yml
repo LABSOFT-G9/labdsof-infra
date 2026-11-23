@@ -39,3 +39,33 @@
     owner: root
     group: root
     mode: "0755"
+
+# DuckDNS: keeps the environment's public name pointing at the edge host,
+# whose address changes on stop/start (bmc-duckdns-update explains why it runs
+# here and not on the edge host).
+- name: Install the DuckDNS update script
+  ansible.builtin.copy:
+    src: bmc-duckdns-update
+    dest: /usr/local/bin/bmc-duckdns-update
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the DuckDNS update units
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /etc/systemd/system/{{ item }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - bmc-duckdns-update.service
+    - bmc-duckdns-update.timer
+
+- name: Enable the DuckDNS update timer
+  ansible.builtin.systemd_service:
+    name: bmc-duckdns-update.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+  when: app_duckdns_domain | length > 0

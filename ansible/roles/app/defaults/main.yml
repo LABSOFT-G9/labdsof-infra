@@ -9,3 +9,10 @@ app_databases:
   - dispatch
   - notification
   - keycloak
+
+# Public name of the environment (Keycloak's hostname and token issuer, the
+# TLS certificate). DuckDNS: app_duckdns_domain is the part before
+# .duckdns.org, kept pointing at the edge host by bmc-duckdns-update.timer
+# with the token in /bmc/<env>/app/duckdns_token. Empty: no DuckDNS update.
+app_duckdns_domain: bmc-g9
+app_public_host: "{{ app_duckdns_domain }}.duckdns.org"

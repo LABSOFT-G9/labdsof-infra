@@ -107,7 +107,7 @@ jobs:
           pipx inject ansible-lint ansible-core==2.21.6
           ansible-lint
       - name: ShellCheck
-        run: shellcheck ansible/roles/database/files/*.sh ansible/roles/app/files/bmc-app-deploy ansible/ssm-ssh-proxy.sh
+        run: shellcheck ansible/roles/database/files/*.sh ansible/roles/app/files/bmc-app-deploy ansible/roles/app/files/bmc-duckdns-update ansible/ssm-ssh-proxy.sh
 
   plan:
     name: Plan ${{ matrix.env }}

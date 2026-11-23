@@ -151,7 +151,8 @@ resource "aws_instance" "edge" {
   subnet_id     = var.subnet_id
   # Its public address: assigned by AWS, it changes when the host is stopped
   # and started, and is not billed while stopped (an Elastic IP would be).
-  # Use an Elastic IP once a DNS name must point here.
+  # The DNS name follows it through DuckDNS, updated from the application
+  # host (ansible/roles/app, bmc-duckdns-update), so no Elastic IP is needed.
   associate_public_ip_address = true
   vpc_security_group_ids      = [aws_security_group.edge.id]
   iam_instance_profile        = aws_iam_instance_profile.edge.name
