@@ -5,7 +5,10 @@
 # /opt/bmc-app and calls this through SSM Run Command (no SSH). This script
 # 1. reads the service database users' passwords from SSM Parameter Store into
 #    /run/bmc-app/deploy.env (tmpfs, root only), with the image tag and the
-#    database address, for Compose to interpolate;
+#    database address and the public host name, for Compose to interpolate;
+#    also the application secrets listed in BMC_APP_SECRETS, each read from
+#    <BMC_PARAMETER_PREFIX>/secrets/<name> and written as <NAME> (for example
+#    keycloak_admin_password -> KEYCLOAK_ADMIN_PASSWORD);
 # 2. pulls the images of that tag and starts or updates the containers
 #    (Compose restarts only the containers whose image changed);
 # 3. removes images no container uses any more.
@@ -17,7 +20,8 @@ tag=${1:?usage: bmc-app-deploy <image tag>}
 
 # shellcheck disable=SC1091
 source /etc/bmc/app.env
-: "${AWS_REGION:?}" "${BMC_ENVIRONMENT:?}" "${BMC_DB_HOST:?}" "${BMC_DB_USERS_PREFIX:?}"
+: "${AWS_REGION:?}" "${BMC_ENVIRONMENT:?}" "${BMC_DB_HOST:?}" "${BMC_DB_USERS_PREFIX:?}" "${BMC_PARAMETER_PREFIX:?}"
+[[ "${BMC_PUBLIC_HOST:-}" =~ ^[a-z0-9.-]{1,253}$ ]] || { echo "Invalid or missing BMC_PUBLIC_HOST" >&2; exit 1; }
 
 dir=/opt/bmc-app
 [ -f "$dir/compose.yaml" ] || { echo "Missing $dir/compose.yaml" >&2; exit 1; }
@@ -30,6 +34,8 @@ read -r -a databases <<<"${BMC_DATABASES:-}"
 {
   echo "BMC_TAG=$tag"
   echo "BMC_ENVIRONMENT=$BMC_ENVIRONMENT"
+  # Public name: Keycloak's hostname and token issuer, the TLS certificate.
+  echo "BMC_PUBLIC_HOST=$BMC_PUBLIC_HOST"
   echo "DB_HOST=$BMC_DB_HOST"
   echo "DB_PORT=3306"
 } >"$env"
@@ -46,6 +52,30 @@ if [ "${#databases[@]}" -gt 0 ]; then
   done
   unset params
 fi
+
+read -r -a secrets <<<"${BMC_APP_SECRETS:-}"
+for name in "${secrets[@]}"; do
+  # Lower-case names only, and never one that would override the variables above.
+  [[ "$name" =~ ^[a-z][a-z0-9_]{0,63}$ ]] || { echo "Invalid secret name: $name" >&2; exit 1; }
+  [[ "$name" =~ ^(bmc_tag|bmc_environment|bmc_public_host|db_host|db_port)$ || "$name" == *_db_password ]] \
+    && { echo "Reserved secret name: $name" >&2; exit 1; }
+done
+# get-parameters takes at most 10 names per call.
+for ((i = 0; i < ${#secrets[@]}; i += 10)); do
+  batch=("${secrets[@]:i:10}")
+  params=$(aws ssm get-parameters --region "$AWS_REGION" --with-decryption \
+    --names "${batch[@]/#/$BMC_PARAMETER_PREFIX/secrets/}" --output json)
+  missing=$(jq -r '.InvalidParameters | join(", ")' <<<"$params")
+  [ -z "$missing" ] || { echo "Missing SSM parameters: $missing" >&2; exit 1; }
+  for name in "${batch[@]}"; do
+    value=$(jq -r --arg n "$BMC_PARAMETER_PREFIX/secrets/$name" '.Parameters[] | select(.Name == $n) | .Value' <<<"$params")
+    # Single quotes: Compose reads the value literally (no $ interpolation).
+    [[ "$value" != *"'"* && "$value" != *$'\n'* ]] \
+      || { echo "Secret $name contains a single quote or a line break: not supported" >&2; exit 1; }
+    printf "%s='%s'\n" "${name^^}" "$value" >>"$env"
+  done
+  unset params value
+done
 
 cd "$dir"
 docker compose --env-file "$env" pull --quiet
