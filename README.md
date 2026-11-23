@@ -140,6 +140,17 @@ unset DUCKDNS_TOKEN
 
 Check on the host (SSM session): `systemctl list-timers bmc-duckdns-update.timer`, `journalctl -u bmc-duckdns-update`, and from anywhere `dig +short bmc-g9.duckdns.org` should match `terraform output edge_public_ip`.
 
+### Application secrets
+
+Secrets the application's `compose.yaml` needs besides the database passwords (Keycloak's admin password and client secrets, EN-02-04) live in Parameter Store under `/bmc/<env>/app/secrets/<name>`. `bmc-app-deploy` reads the names listed in `app_secrets` (`ansible/roles/app/defaults/main.yml`) and writes each one into `deploy.env` as `<NAME>` (`keycloak_admin_password` → `KEYCLOAK_ADMIN_PASSWORD`), single-quoted so Compose takes it literally. Names are lower case; the variables the script already writes (`bmc_tag`, `bmc_public_host`, `db_host`, `*_db_password` …) are refused, and so is a value with a single quote or a line break. A listed name whose parameter does not exist stops the deploy. The list is empty until the application uses one. To add one:
+
+```bash
+aws ssm put-parameter --type SecureString --name /bmc/dev/app/secrets/keycloak_admin_password \
+  --value "$(openssl rand -base64 48 | tr -dc 'A-Za-z0-9' | head -c 32)" --query Version
+```
+
+then add its name to `app_secrets` in a PR and run Ansible before the deploy that needs it. The application host already may read `/bmc/<env>/app/*`: no IAM change.
+
 `bmc-deploy-dev` can only run `AWS-RunShellScript` on instances tagged `Environment=dev` and `Role=app`, read its command results and list instances. Its access key is created by hand and stored only in the application repository's `dev` environment, never printed:
 
 ```
