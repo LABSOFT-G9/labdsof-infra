@@ -22,4 +22,13 @@ app_public_host: "{{ app_duckdns_domain }}.duckdns.org"
 # /bmc/<env>/app/secrets/<name> and reaches Compose as <NAME>
 # (keycloak_admin_password -> KEYCLOAK_ADMIN_PASSWORD). Create the parameter
 # before adding its name here, or the deploy stops.
-app_secrets: []
+#
+# This list is dev's: only the dev inventory exists. The last two create the
+# synthetic test accounts (shared password) and must never reach production;
+# give prod its own list when its Ansible is added.
+app_secrets:
+  - keycloak_admin_password # Keycloak's bootstrap administrator
+  - bmc_edge_client_secret # Keycloak client `bmc-edge` (Traefik's OIDC plugin)
+  - oidc_plugin_secret # session-cookie key, exactly 32 characters
+  - bmc_seed_synthetic # "true": synthetic accounts and buildings (dev only)
+  - bmc_synthetic_user_password # synthetic accounts' password, 12+ characters (dev only)
