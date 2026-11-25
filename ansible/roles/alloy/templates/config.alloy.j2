@@ -106,7 +106,7 @@ loki.write "monitoring" {
   }
   external_labels = {
     host        = "{{ inventory_hostname }}",
-    role        = "{{ group_names | difference(['all']) | first | default('unknown') }}",
+    role        = "{{ group_names | reject('in', ['all', 'aws_ec2']) | sort | first | default('unknown') }}",
     environment = "{{ bmc_environment }}",
   }
 }
@@ -118,7 +118,7 @@ prometheus.remote_write "monitoring" {
   }
   external_labels = {
     host        = "{{ inventory_hostname }}",
-    role        = "{{ group_names | difference(['all']) | first | default('unknown') }}",
+    role        = "{{ group_names | reject('in', ['all', 'aws_ec2']) | sort | first | default('unknown') }}",
     environment = "{{ bmc_environment }}",
   }
 }
